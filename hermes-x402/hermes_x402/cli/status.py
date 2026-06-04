@@ -1,0 +1,42 @@
+"""`hermes x402 status` and the `/x402` slash summary.
+
+Reports the signer connection and wallet address + USDC balance. ``status_summary``
+returns a JSON string (used by the slash command); ``status_command`` prints a
+human-friendly version for the CLI.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _gather() -> dict:
+    from .. import config
+    from ..coinbase_mcp import wallet
+
+    out: dict = {"network": config.network()}
+    out["signer"] = config.coinbase_mcp_config().get("transport")
+    try:
+        out["address"] = wallet.address()
+        out["usdc_balance"] = wallet.usdc_balance(config.network())
+    except Exception as exc:
+        out["wallet_error"] = str(exc)
+    return out
+
+
+def status_summary(raw_args: str = "") -> str:
+    """JSON status string for the /x402 slash command."""
+    return json.dumps(_gather())
+
+
+def status_command(args) -> int:
+    s = _gather()
+    print("x402 status")
+    print(f"  signer:   Coinbase MCP ({s.get('signer', '?')})")
+    print(f"  wallet:   {s.get('address') or '(unavailable)'}")
+    bal = s.get("usdc_balance")
+    print(f"  balance:  {bal if bal is not None else '(unknown)'} USDC on {s.get('network')}")
+    return 0

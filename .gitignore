@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# Local secrets / runtime state (never commit wallet material or keys)
+.env
+*.local
+wallet.json
+ledger.sqlite
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

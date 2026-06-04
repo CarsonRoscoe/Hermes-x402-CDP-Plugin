@@ -1,0 +1,43 @@
+# Example ~/.hermes/config.yaml for running hermes-x402 locally.
+# Copy the relevant sections into your ~/.hermes/config.yaml.
+# API keys go in ~/.hermes/.env (never in this file).
+
+# --- Model ---
+# Pick any provider you have a key for; examples below.
+# Uncomment one block and add the key to ~/.hermes/.env.
+
+# Anthropic Claude
+# model:
+#   provider: anthropic
+#   name: claude-sonnet-4-5
+
+# OpenAI
+# model:
+#   provider: openai
+#   name: gpt-4o
+
+# OpenRouter (200+ models, single key)
+# model:
+#   provider: openrouter
+#   name: anthropic/claude-sonnet-4-5
+
+# --- x402 plugin ---
+x402:
+  # Fake signer (dev). The plugin resolves the binary from its own venv automatically;
+  # you only need this block if you want to override the path or switch to remote.
+  coinbase_mcp:
+    transport: stdio
+    # command defaults to the venv-local fake-coinbase-mcp binary — leave empty.
+
+  # Per-call USDC cap and session ceiling.
+  max_price_usdc: 0.10
+  session_budget_usdc: 5.0
+
+  # "strict" = refuse the paid call if any money guard can't be verified (recommended).
+  failure_mode: strict
+
+# --- Plugins ---
+# hermes-x402 is discovered automatically via pip entry point once installed.
+# To explicitly enable/disable:
+# plugins:
+#   enabled: [hermes-x402]

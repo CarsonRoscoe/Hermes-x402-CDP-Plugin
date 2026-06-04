@@ -1,0 +1,26 @@
+name: hermes-x402
+version: 0.0.1
+description: x402 micropayments for Hermes — paid HTTP/MCP tools signed by a Coinbase MCP server.
+author: Coinbase
+kind: standalone
+
+# Tools surfaced to the agent (documentation/introspection; actual registration
+# happens in register(ctx)).
+provides_tools:
+  - x402_request
+  - x402_retry_mcp_payment
+
+# Lifecycle hooks this plugin attaches.
+provides_hooks:
+  - pre_tool_call
+  - on_session_end
+
+# Additional surfaces registered in register(ctx) (documented here for discoverability;
+# the manifest schema only formally tracks tools + hooks):
+#   - CLI:   hermes x402 {init,wallet,fund,balance,status,spend,payments}
+#   - slash: /x402 (wallet + signer + balance summary)
+#   - skill: x402-payments (bundled, read-only)
+
+# No required env: signing is delegated to the Coinbase MCP (OAuth in prod; a local
+# stdio fake in dev). For the remote transport, the OAuth/CAT bearer is read from
+# COINBASE_MCP_TOKEN, but the plugin loads fine without it.
