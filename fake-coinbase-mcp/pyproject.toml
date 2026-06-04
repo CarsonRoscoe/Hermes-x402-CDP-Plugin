@@ -1,0 +1,25 @@
+[project]
+name = "fake-coinbase-mcp"
+version = "0.0.1"
+description = "Local fake of the Coinbase MCP x402 signer, for developing hermes-x402 before the real server exists."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "Coinbase" }]
+
+# Signs locally with eth-account by default; CDP server wallet when CDP_* env is present.
+dependencies = [
+    "x402[evm]>=2.11,<3",
+    "cdp-sdk>=1,<2",
+    "eth-account>=0.13,<0.14",
+]
+
+[project.scripts]
+fake-coinbase-mcp = "fake_coinbase_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fake_coinbase_mcp"]
