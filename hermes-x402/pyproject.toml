@@ -42,14 +42,6 @@ dev = [
 [project.entry-points."hermes_agent.plugins"]
 hermes-x402 = "hermes_x402"
 
-# TEMPORARY — REMOVE BEFORE COMMIT.
-# Links x402 to the local repo source so plugin changes can be tested against an unreleased
-# x402 fix (the MCP payment-meta exclude_none serialization fix) instead of the published wheel.
-# The x402 package uses a flat layout with hatchling force-include remapping, so this resolves
-# as a local build (re-run `uv pip install -e ../../x402/python/x402 --no-deps` to pick up edits).
-[tool.uv.sources]
-x402 = { path = "../../x402/python/x402", editable = true }
-
 [project.urls]
 Homepage = "https://github.com/coinbase/hermes-x402"
 Repository = "https://github.com/coinbase/hermes-x402"

@@ -13,7 +13,7 @@ X402_REQUEST = {
         "direct HTTP API whose URL you already know. Do NOT use it to call CDP Bazaar services — "
         "those are paid via mcp_bazaar_proxy_tool_call followed by x402_retry_mcp_payment, never "
         "by calling their URL directly. If payment is rejected due to insufficient balance, use "
-        "mcp_coinbase_faucet_usdc (testnet) to fund the wallet first, then retry."
+        "cdp_faucet (testnet) or cdp_onramp (mainnet) to fund the wallet first, then retry."
     ),
     "parameters": {
         "type": "object",
@@ -41,7 +41,7 @@ X402_REQUEST = {
                 "type": "boolean",
                 "description": (
                     "Set true only to deliberately retry an operation a prior attempt left "
-                    "unconfirmed (may pay again)."
+                    "unconfirmed (may pay again). Use after an unknown_settlement error to retry."
                 ),
             },
         },
@@ -49,67 +49,82 @@ X402_REQUEST = {
     },
 }
 
-X402_RETRY_MCP_PAYMENT = {
-    "name": "x402_retry_mcp_payment",
-    "description": (
-        "Pay for and retry an mcp_* tool call that returned a payment-required (402) result. "
-        "Set tool_name to the EXACT mcp_* tool you just invoked and pass the SAME arguments; it "
-        "signs a USDC payment and re-issues that call, returning the paid result. "
-        "IMPORTANT for CDP Bazaar services: the tool you invoked is the proxy, so set "
-        "tool_name=\"mcp_bazaar_proxy_tool_call\" with arguments={toolName, parameters} — do NOT "
-        "pass the discovered x402_… resource name (it is not a registered tool and will fail "
-        "with 'no mcp_servers entry matches tool'). Do not call this preemptively; only after the "
-        "same mcp_* tool returned payment-required in this session."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "tool_name": {
-                "type": "string",
-                "description": (
-                    "The exact mcp_* tool you literally called that returned payment-required. "
-                    "For a Bazaar service this is \"mcp_bazaar_proxy_tool_call\", NOT the "
-                    "discovered x402_… resource name."
-                ),
+def build_retry_mcp_schema(bazaar_proxy_tool: str = "mcp_bazaar_proxy_tool_call") -> dict:
+    """Build the ``x402_retry_mcp_payment`` JSON schema with the actual Bazaar proxy tool name.
+
+    The proxy tool name depends on how the operator named their Bazaar server in
+    ``mcp_servers`` (e.g. ``"bazaar"`` → ``mcp_bazaar_proxy_tool_call``, ``"cdp-bazaar"``
+    → ``mcp_cdp_bazaar_proxy_tool_call``). Injecting it at registration time (rather than
+    hardcoding ``mcp_bazaar_proxy_tool_call``) keeps the LLM-visible description accurate
+    for any server name.
+    """
+    return {
+        "name": "x402_retry_mcp_payment",
+        "description": (
+            "Pay for and retry an mcp_* tool call that returned a payment-required (402) result. "
+            "Set tool_name to the EXACT mcp_* tool you just invoked and pass the SAME arguments; it "
+            "signs a USDC payment and re-issues that call, returning the paid result. "
+            f"IMPORTANT for CDP Bazaar services: the tool you invoked is the proxy, so set "
+            f"tool_name={bazaar_proxy_tool!r} with arguments={{toolName, parameters}} — do NOT "
+            "pass the discovered x402_… resource name (it is not a registered tool and will fail "
+            "with 'no mcp_servers entry matches tool'). Do not call this preemptively; only after the "
+            "same mcp_* tool returned payment-required in this session."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": (
+                        "The exact mcp_* tool you literally called that returned payment-required. "
+                        f"For a Bazaar service this is {bazaar_proxy_tool!r}, NOT the "
+                        "discovered x402_… resource name."
+                    ),
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": (
+                        "The same arguments you passed to the original mcp_* call. For a Bazaar proxy "
+                        f"retry this is {{toolName: \"x402_…\", parameters: {{…}}}} — identical to your "
+                        f"{bazaar_proxy_tool} args."
+                    ),
+                },
+                "payment_required": {
+                    "type": "object",
+                    "description": (
+                        "Rarely needed — leave empty and the tool re-probes the server to discover the "
+                        "requirement. Optional override: the structured payment-required details from "
+                        "the failed call, if you happen to have them."
+                    ),
+                },
+                "max_price_usdc": {
+                    "type": "number",
+                    "description": "Refuse to pay more than this many USDC for the call.",
+                },
+                "idempotency_key": {
+                    "type": "string",
+                    "description": (
+                        "Optional stable key making this a one-time operation: a repeat call with "
+                        "the same key returns the prior paid result instead of paying again."
+                    ),
+                },
+                "override": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true only to deliberately retry an operation a prior attempt left "
+                        "unconfirmed (may pay again). After an unknown_settlement error, call the "
+                        "original tool again with override=true to retry (may pay again)."
+                    ),
+                },
             },
-            "arguments": {
-                "type": "object",
-                "description": (
-                    "The same arguments you passed to the original mcp_* call. For a Bazaar proxy "
-                    "retry this is {toolName: \"x402_…\", parameters: {…}} — identical to your "
-                    "mcp_bazaar_proxy_tool_call args."
-                ),
-            },
-            "payment_required": {
-                "type": "object",
-                "description": (
-                    "Rarely needed — leave empty and the tool re-probes the server to discover the "
-                    "requirement. Optional override: the structured payment-required details from "
-                    "the failed call, if you happen to have them."
-                ),
-            },
-            "max_price_usdc": {
-                "type": "number",
-                "description": "Refuse to pay more than this many USDC for the call.",
-            },
-            "idempotency_key": {
-                "type": "string",
-                "description": (
-                    "Optional stable key making this a one-time operation: a repeat call with "
-                    "the same key returns the prior paid result instead of paying again."
-                ),
-            },
-            "override": {
-                "type": "boolean",
-                "description": (
-                    "Set true only to deliberately retry an operation a prior attempt left "
-                    "unconfirmed (may pay again)."
-                ),
-            },
+            "required": ["tool_name", "arguments"],
         },
-        "required": ["tool_name", "arguments"],
-    },
-}
+    }
+
+
+# Static fallback for import-time access (e.g. tests). Registration code should
+# call build_retry_mcp_schema() with the live Bazaar proxy tool name instead.
+X402_RETRY_MCP_PAYMENT = build_retry_mcp_schema()
 
 # --------------------------------------------------------------------------- #
 # Local CDP wallet tools (provider == "local"). Self-custodial CDP server wallet.
@@ -235,8 +250,10 @@ CDP_TRANSFER = {
     "name": "cdp_transfer",
     "description": (
         "Send USDC or ETH from the CDP server wallet to another address. This MOVES REAL "
-        "FUNDS out of the wallet — use only when explicitly instructed. USDC transfers are "
-        "capped by x402.max_price_usdc unless 'override' is set."
+        "FUNDS out of the wallet — use only when explicitly instructed. "
+        "NOTE: cdp_transfer is NOT subject to the x402 session budget (x402.session_budget_usdc); "
+        "it only checks the per-call cap (x402.max_price_usdc) unless 'override' is set. "
+        "Call cdp_wallet_balance first to confirm the wallet has sufficient funds."
     ),
     "parameters": {
         "type": "object",

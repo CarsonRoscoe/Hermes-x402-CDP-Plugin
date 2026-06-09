@@ -17,6 +17,10 @@ from . import config, ledger
 
 logger = logging.getLogger(__name__)
 
+# Only the x402 payment tools are session-budget-gated. ``cdp_transfer`` is intentionally
+# excluded: it is a direct wallet operation (not an x402 payment) and has its own per-call
+# cap check in the tool handler. Adding it here would conflate wallet transfers with x402
+# spend and break the accounting. Keep this set minimal and explicit.
 _PAID_TOOLS = {"x402_request", "x402_retry_mcp_payment"}
 
 

@@ -48,6 +48,7 @@ class Wallet:
         self._address: str | None = None
         self._account_name: str | None = None
         self._signer: Any = None  # x402 EthAccountSigner over a CDP EvmLocalAccount
+        self._account: Any = None  # cached CDP EvmLocalAccount (reused for transfers)
         self._lock = asyncio.Lock()
 
     def _check_credentials(self) -> None:
@@ -77,6 +78,7 @@ class Wallet:
                 acct = await cdp.evm.get_or_create_account(name=name)
                 self._address = acct.address
                 self._account_name = name
+                self._account = acct
                 # EvmLocalAccount builds its own sync signing client from the CDP
                 # credentials, so it remains valid after the async client closes.
                 self._signer = EthAccountSigner(EvmLocalAccount(acct))
@@ -167,7 +169,6 @@ class Wallet:
 
     async def transfer(self, to: str, amount: Any, token: str, network: str) -> dict:
         await self.ensure()
-        from cdp import CdpClient
 
         token = (token or "usdc").lower()
         decimals = _TOKEN_DECIMALS.get(token, 18)
@@ -178,9 +179,8 @@ class Wallet:
         if atomic <= 0:
             raise ValueError("transfer amount must be greater than zero")
 
-        async with CdpClient() as cdp:
-            acct = await cdp.evm.get_or_create_account(name=config.cdp_account_name())
-            tx_hash = await acct.transfer(to=to, amount=atomic, token=token, network=network)
+        # Use the account cached during ensure() to avoid a redundant CDP API round-trip.
+        tx_hash = await self._account.transfer(to=to, amount=atomic, token=token, network=network)
         tx_hash = str(tx_hash)
         return {
             "tx_hash": tx_hash,

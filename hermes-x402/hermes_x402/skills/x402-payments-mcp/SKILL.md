@@ -138,5 +138,15 @@ clear error. Prefer services that omit `assetTransferMethod` or set it to `"erc3
 - After funding, allow ~15 seconds for the faucet transaction to confirm before retrying.
 
 ## Verification
-A successful paid result includes `payment: {...}` (HTTP) or `payment_made: true` (MCP).
-Use `hermes x402 payments` or `hermes x402 balance` to review spend and wallet state.
+A successful paid result includes `payment: {...}` (HTTP) or `payment_settled: true` (MCP).
+Note: `payment_made: true` means signing was attempted; `payment_settled: true` means the
+facilitator confirmed the transaction — only the latter guarantees funds moved and the service
+was rendered. Use `hermes x402 payments` or `hermes x402 balance` to review spend and wallet state.
+
+## Recovery from unknown_settlement errors
+If a paid call returns `error: "unknown_settlement"`, money may or may not have moved. Do
+not assume failure. Check `hermes x402 payments` to see if the transaction appears. If you
+need to retry, pass `override=true`:
+```
+x402_request(url="https://...", override=true)
+```

@@ -103,7 +103,9 @@ cdp_wallet_balance(network="base-sepolia")
 cdp_transfer(to="0x...", amount=1.5, token="usdc")
 ```
 Only when explicitly instructed. USDC transfers above `x402.max_price_usdc` are refused
-unless `override=true`.
+unless `override=true`. **Important:** `cdp_transfer` is NOT covered by the session budget
+(`x402.session_budget_usdc`) — it is a direct wallet operation, not an x402 payment.
+Use `cdp_wallet_balance` to confirm funds before transferring.
 
 ### Reconcile spend (receipts)
 ```
@@ -141,5 +143,15 @@ A service using `assetTransferMethod == "permit2"` is skipped at signing time.
 - `cdp_transfer` moves real funds; confirm the recipient and amount.
 
 ## Verification
-A successful paid result includes `payment: {...}` (HTTP) or `payment_made: true` (MCP).
-Use `cdp_payments` (or `cdp_wallet_balance`) to review spend and wallet state.
+A successful paid result includes `payment: {...}` (HTTP) or `payment_settled: true` (MCP).
+Note: `payment_made: true` means signing was attempted; `payment_settled: true` means the
+facilitator confirmed the transaction — only the latter guarantees funds moved and the service
+was rendered. Use `cdp_payments` (or `cdp_wallet_balance`) to review spend and wallet state.
+
+## Recovery from unknown_settlement errors
+If a paid call returns `error: "unknown_settlement"`, money may or may not have moved. Do
+not assume failure. Check `cdp_payments` to see if the transaction appears. If you need to
+retry, pass `override=true`:
+```
+x402_request(url="https://...", override=true)
+```

@@ -6,12 +6,48 @@ payment-journal orchestration in one place so the two tools don't copy-paste it.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import time
 from typing import Callable
 
 from .. import config, ledger
+
+
+def extract_server_error(body: dict | None) -> str | None:
+    """Extract the most informative error string from a parsed server response body.
+
+    Checks the common error-field names used across x402 server/facilitator responses,
+    in order of specificity. Returns ``None`` when ``body`` is absent or has none of them.
+    """
+    if not isinstance(body, dict):
+        return None
+    return (
+        body.get("error")
+        or body.get("message")
+        or body.get("detail")
+        or body.get("reason")
+    ) or None
+
+
+def decode_x402_header(raw: str) -> dict | None:
+    """Decode an x402 wire header value (base64-encoded JSON) to a dict.
+
+    Tries base64-decode first (both with and without padding correction), then falls back
+    to treating the value as raw JSON. Returns ``None`` on any parse failure.
+    """
+    if not raw:
+        return None
+    for attempt in (raw, raw + "=="):
+        try:
+            return json.loads(base64.b64decode(attempt).decode())
+        except Exception:
+            pass
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
 
 
 class StructuredToolError(Exception):

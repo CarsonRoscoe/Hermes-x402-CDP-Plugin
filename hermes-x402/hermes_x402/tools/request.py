@@ -12,13 +12,19 @@ Returns a JSON string: ``{status, body, payment: {...} | null}`` on success, or
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 
 from .. import config
 from .._async import run_async
-from ._paid import StructuredToolError, effective_cap, record_paid_call, run_journaled
+from ._paid import (
+    StructuredToolError,
+    decode_x402_header,
+    effective_cap,
+    extract_server_error,
+    record_paid_call,
+    run_journaled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,35 +34,28 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 def _decode_payment_response(headers) -> dict | None:
-    """Decode the x402 PAYMENT-RESPONSE header (base64 JSON SettleResponse), if present."""
-    for name in ("X-PAYMENT-RESPONSE", "PAYMENT-RESPONSE"):
+    """Decode the x402 PAYMENT-RESPONSE header (base64 JSON SettleResponse), if present.
+
+    Checks V2 name first (``PAYMENT-RESPONSE``), then the V1 legacy name
+    (``X-PAYMENT-RESPONSE``).
+    """
+    for name in ("PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE"):
         raw = headers.get(name)
-        if not raw:
-            continue
-        try:
-            return json.loads(base64.b64decode(raw).decode())
-        except Exception:
-            try:
-                return json.loads(raw)
-            except Exception:
-                return None
+        if raw:
+            return decode_x402_header(raw)
     return None
 
 
 def _decode_payment_required(headers) -> dict | None:
-    """Decode the x402 PAYMENT-REQUIRED header so we can surface it on failed payment."""
+    """Decode the x402 PAYMENT-REQUIRED header so we can surface it on failed payment.
+
+    Checks V2 name first (``PAYMENT-REQUIRED``), then the V1 legacy name
+    (``X-PAYMENT-REQUIRED``).
+    """
     for name in ("PAYMENT-REQUIRED", "X-PAYMENT-REQUIRED"):
         raw = headers.get(name)
-        if not raw:
-            continue
-        try:
-            decoded = json.loads(base64.b64decode(raw + "==").decode())
-            return decoded
-        except Exception:
-            try:
-                return json.loads(raw)
-            except Exception:
-                pass
+        if raw:
+            return decode_x402_header(raw)
     return None
 
 
@@ -76,14 +75,7 @@ def _classify_402(exc: "_Payment402Error") -> dict:
         pass
 
     # Extract any error detail the server sent back.
-    server_error: str | None = None
-    if isinstance(body_parsed, dict):
-        server_error = (
-            body_parsed.get("error")
-            or body_parsed.get("message")
-            or body_parsed.get("detail")
-            or body_parsed.get("reason")
-        )
+    server_error = extract_server_error(body_parsed)
     # Include the raw body so the agent can see exactly what the server said.
     raw_body = resp_text[:4000] if resp_text.strip() and resp_text.strip() != "{}" else None
 
@@ -134,9 +126,9 @@ def _classify_402(exc: "_Payment402Error") -> dict:
     )
     if is_insufficient:
         hint = (
-            "Insufficient USDC balance. Fund the wallet with testnet USDC (e.g. via "
-            "`mcp_coinbase_faucet_usdc`) and retry."
-        )
+                "Insufficient USDC balance. Fund the wallet with testnet USDC (e.g. via "
+                "`cdp_faucet`) or with mainnet USDC via `cdp_onramp`, then retry."
+            )
     elif server_error:
         hint = f"Facilitator rejected with: {server_error}"
     else:
@@ -278,14 +270,27 @@ class _Structured402(StructuredToolError):
 
 
 def _amount_from_payment(payment: dict) -> float:
-    """Best-effort USDC amount from a settle response (0.0 if not present)."""
+    """Best-effort USDC amount from a settle response (0.0 if not present).
+
+    The x402 spec mandates that amounts on the wire are integer base units (USDC has 6
+    decimals). ``amountUsdc`` / ``amount_usdc`` are convenience human-unit aliases emitted
+    by some facilitator implementations — they are left as-is. All other keys are treated
+    as base units and divided by ``USDC_BASE_UNITS``.
+    """
     if not isinstance(payment, dict):
         return 0.0
-    for key in ("amount", "value", "amountUsdc", "amount_usdc"):
+    # Human-unit convenience keys emitted by some facilitators — no conversion needed.
+    for key in ("amountUsdc", "amount_usdc"):
         if key in payment:
             try:
-                v = float(payment[key])
-                return v / config.USDC_BASE_UNITS if v > 1000 else v
+                return float(payment[key])
+            except (TypeError, ValueError):
+                pass
+    # Standard wire keys carry integer base units.
+    for key in ("amount", "value"):
+        if key in payment:
+            try:
+                return int(payment[key]) / config.USDC_BASE_UNITS
             except (TypeError, ValueError):
                 pass
     return 0.0

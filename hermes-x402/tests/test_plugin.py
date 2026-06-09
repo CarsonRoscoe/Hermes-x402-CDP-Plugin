@@ -743,3 +743,213 @@ def test_cdp_tools_check_fn_is_local_provider():
     for spec in cdp_specs:
         assert spec.check_fn is config.is_local_provider, \
             f"{spec.name} must be gated by is_local_provider"
+
+
+# --------------------------------------------------------------------------- #
+# decode_x402_header / header parsing helpers
+# --------------------------------------------------------------------------- #
+
+class TestDecodeX402Header:
+    """Tests for the shared _paid.decode_x402_header helper."""
+
+    def test_valid_base64_json(self):
+        import base64
+        from hermes_x402.tools._paid import decode_x402_header
+
+        payload = {"x402Version": 2, "resource": {"url": "https://example.com"}}
+        encoded = base64.b64encode(json.dumps(payload).encode()).decode()
+        assert decode_x402_header(encoded) == payload
+
+    def test_base64_without_padding(self):
+        """Header values often arrive without '==' padding — should still decode."""
+        import base64
+        from hermes_x402.tools._paid import decode_x402_header
+
+        payload = {"accepts": [{"scheme": "exact", "network": "eip155:84532"}]}
+        encoded = base64.b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        assert decode_x402_header(encoded) == payload
+
+    def test_raw_json_fallback(self):
+        """When the value is raw JSON (not base64), it should still parse."""
+        from hermes_x402.tools._paid import decode_x402_header
+
+        raw = '{"error": "insufficient_funds"}'
+        assert decode_x402_header(raw) == {"error": "insufficient_funds"}
+
+    def test_empty_string_returns_none(self):
+        from hermes_x402.tools._paid import decode_x402_header
+
+        assert decode_x402_header("") is None
+
+    def test_unparseable_returns_none(self):
+        from hermes_x402.tools._paid import decode_x402_header
+
+        assert decode_x402_header("not-json-or-base64!!!") is None
+
+    def test_none_returns_none(self):
+        from hermes_x402.tools._paid import decode_x402_header
+
+        assert decode_x402_header(None) is None
+
+
+class TestRequestHeaderParsing:
+    """Tests for _decode_payment_response and _decode_payment_required in request.py."""
+
+    def _make_headers(self, key: str, payload: dict) -> dict:
+        import base64
+        return {key: base64.b64encode(json.dumps(payload).encode()).decode()}
+
+    def test_decode_payment_response_v2_header_name(self):
+        from hermes_x402.tools.request import _decode_payment_response
+
+        payload = {"transaction": "0xabc", "network": "eip155:84532"}
+        headers = self._make_headers("PAYMENT-RESPONSE", payload)
+        assert _decode_payment_response(headers) == payload
+
+    def test_decode_payment_response_v1_legacy_header_name(self):
+        from hermes_x402.tools.request import _decode_payment_response
+
+        payload = {"transaction": "0xdef"}
+        headers = self._make_headers("X-PAYMENT-RESPONSE", payload)
+        assert _decode_payment_response(headers) == payload
+
+    def test_decode_payment_response_v2_takes_priority_over_v1(self):
+        """V2 header should be preferred when both are present."""
+        import base64
+        from hermes_x402.tools.request import _decode_payment_response
+
+        v2 = {"transaction": "v2"}
+        v1 = {"transaction": "v1"}
+        headers = {
+            "PAYMENT-RESPONSE": base64.b64encode(json.dumps(v2).encode()).decode(),
+            "X-PAYMENT-RESPONSE": base64.b64encode(json.dumps(v1).encode()).decode(),
+        }
+        assert _decode_payment_response(headers)["transaction"] == "v2"
+
+    def test_decode_payment_response_missing_returns_none(self):
+        from hermes_x402.tools.request import _decode_payment_response
+
+        assert _decode_payment_response({}) is None
+        assert _decode_payment_response({"Content-Type": "application/json"}) is None
+
+    def test_decode_payment_required_v2_header_name(self):
+        from hermes_x402.tools.request import _decode_payment_required
+
+        payload = {"x402Version": 2, "accepts": [{"scheme": "exact"}]}
+        headers = self._make_headers("PAYMENT-REQUIRED", payload)
+        assert _decode_payment_required(headers) == payload
+
+    def test_decode_payment_required_v1_legacy_header_name(self):
+        from hermes_x402.tools.request import _decode_payment_required
+
+        payload = {"x402Version": 1, "accepts": []}
+        headers = self._make_headers("X-PAYMENT-REQUIRED", payload)
+        assert _decode_payment_required(headers) == payload
+
+    def test_decode_payment_required_malformed_base64_falls_back_to_json(self):
+        from hermes_x402.tools.request import _decode_payment_required
+
+        raw_json = '{"x402Version": 2, "accepts": []}'
+        assert _decode_payment_required({"PAYMENT-REQUIRED": raw_json}) == {"x402Version": 2, "accepts": []}
+
+    def test_decode_payment_required_missing_returns_none(self):
+        from hermes_x402.tools.request import _decode_payment_required
+
+        assert _decode_payment_required({}) is None
+
+
+# --------------------------------------------------------------------------- #
+# CDP signer policy functions
+# --------------------------------------------------------------------------- #
+
+class _FakeReq:
+    """Minimal fake PaymentRequirements object for signer policy tests."""
+
+    def __init__(self, transfer_method: str | None = None, asset_name: str | None = None):
+        self._transfer_method = transfer_method
+        self._asset_name = asset_name
+
+    def get_extra(self):
+        d = {}
+        if self._transfer_method:
+            d["assetTransferMethod"] = self._transfer_method
+        if self._asset_name:
+            d["name"] = self._asset_name
+        return d or None
+
+
+class TestExcludePermit2Policy:
+    """Tests for _exclude_permit2_policy in cdp/signer.py."""
+
+    def test_drops_permit2_requirements(self):
+        from hermes_x402.cdp.signer import _exclude_permit2_policy
+
+        reqs = [
+            _FakeReq(transfer_method="permit2"),
+            _FakeReq(transfer_method="erc3009"),
+            _FakeReq(),  # no transfer method — keep (defaults to EIP-3009)
+        ]
+        kept = _exclude_permit2_policy(2, reqs)
+        assert len(kept) == 2
+        for r in kept:
+            extra = r.get_extra() or {}
+            assert extra.get("assetTransferMethod") != "permit2"
+
+    def test_all_permit2_returns_empty(self):
+        from hermes_x402.cdp.signer import _exclude_permit2_policy
+
+        reqs = [_FakeReq(transfer_method="permit2"), _FakeReq(transfer_method="permit2")]
+        assert _exclude_permit2_policy(2, reqs) == []
+
+    def test_no_permit2_returns_all(self):
+        from hermes_x402.cdp.signer import _exclude_permit2_policy
+
+        reqs = [_FakeReq(transfer_method="erc3009"), _FakeReq()]
+        assert _exclude_permit2_policy(2, reqs) == reqs
+
+    def test_empty_list_returns_empty(self):
+        from hermes_x402.cdp.signer import _exclude_permit2_policy
+
+        assert _exclude_permit2_policy(2, []) == []
+
+
+class TestPreferUsdcSelector:
+    """Tests for _prefer_usdc_selector in cdp/signer.py."""
+
+    def test_usdc_named_asset_wins(self):
+        from hermes_x402.cdp.signer import _prefer_usdc_selector
+
+        usdc = _FakeReq(asset_name="USDC")
+        other = _FakeReq(asset_name="ETH")
+        # USDC should be selected regardless of order.
+        assert _prefer_usdc_selector(2, [other, usdc]) is usdc
+        assert _prefer_usdc_selector(2, [usdc, other]) is usdc
+
+    def test_usdc_e_variant_also_wins(self):
+        from hermes_x402.cdp.signer import _prefer_usdc_selector
+
+        usdc_e = _FakeReq(asset_name="USDC.e")
+        other = _FakeReq(asset_name="WETH")
+        assert _prefer_usdc_selector(2, [other, usdc_e]) is usdc_e
+
+    def test_no_usdc_returns_first(self):
+        """When no USDC-named asset is present, server order is preserved (first wins)."""
+        from hermes_x402.cdp.signer import _prefer_usdc_selector
+
+        eth = _FakeReq(asset_name="ETH")
+        weth = _FakeReq(asset_name="WETH")
+        assert _prefer_usdc_selector(2, [eth, weth]) is eth
+
+    def test_case_insensitive_match(self):
+        """Asset name comparison is case-insensitive."""
+        from hermes_x402.cdp.signer import _prefer_usdc_selector
+
+        usdc_lower = _FakeReq(asset_name="usdc")
+        other = _FakeReq(asset_name="ETH")
+        assert _prefer_usdc_selector(2, [other, usdc_lower]) is usdc_lower
+
+    def test_single_requirement_returned(self):
+        from hermes_x402.cdp.signer import _prefer_usdc_selector
+
+        req = _FakeReq(asset_name="USDC")
+        assert _prefer_usdc_selector(2, [req]) is req

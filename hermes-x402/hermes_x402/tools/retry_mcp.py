@@ -19,7 +19,7 @@ import re
 from .. import config
 from .._async import run_async
 from ..coinbase_mcp.payment_client import min_usdc_in_accepts
-from ._paid import StructuredToolError, effective_cap, record_paid_call, run_journaled
+from ._paid import StructuredToolError, effective_cap, extract_server_error, record_paid_call, run_journaled
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def _load_mcp_servers() -> dict:
         return {}
 
 
-def resolve_server(tool_name: str) -> tuple[str, str, dict]:
+def resolve_server(tool_name: str, servers: dict | None = None) -> tuple[str, str, dict]:
     """Resolve ``mcp_{server}_{tool}`` -> (server_name, sanitized_tool_suffix, server_cfg).
 
     Longest sanitized-prefix match against ``mcp_servers`` keys, so server names containing
@@ -57,9 +57,13 @@ def resolve_server(tool_name: str) -> tuple[str, str, dict]:
     is recovered later via ``resolve_upstream_name`` (Hermes calls handlers with the original
     tool name, which can differ, e.g. ``get-sum`` -> ``get_sum``). Raises ``KeyError`` if no
     server matches.
+
+    Accepts an optional pre-loaded ``servers`` dict to avoid repeated config reads when the
+    caller already has it.
     """
     rest = tool_name[4:] if tool_name.startswith("mcp_") else tool_name
-    servers = _load_mcp_servers()
+    if servers is None:
+        servers = _load_mcp_servers()
     best: tuple[str, str, dict] | None = None
     for name, scfg in servers.items():
         safe = _sanitize(name)
@@ -95,27 +99,29 @@ def _looks_like_bazaar_resource(tool_name: str) -> bool:
     return tool_name.startswith("x402_") and tool_name not in _OWN_TOOLS
 
 
-def _find_bazaar_proxy_tool() -> str | None:
+def _find_bazaar_proxy_tool(servers: dict) -> str | None:
     """Return the agent-facing ``mcp_{server}_proxy_tool_call`` for the configured Bazaar server.
 
     Identifies the Bazaar by its discovery URL (or the conventional name) so the redirect points
-    at whatever the server is actually called in ``mcp_servers``.
+    at whatever the server is actually called in ``mcp_servers``. Accepts a pre-loaded servers
+    dict to avoid a redundant config read when called from ``_bazaar_redirect``.
     """
-    for name, scfg in _load_mcp_servers().items():
+    for name, scfg in servers.items():
         url = scfg.get("url", "") if isinstance(scfg, dict) else ""
         if "x402/discovery/mcp" in url or name == "bazaar":
             return f"mcp_{_sanitize(name)}_proxy_tool_call"
     return None
 
 
-def _bazaar_redirect(tool_name: str, arguments: dict) -> dict:
+def _bazaar_redirect(tool_name: str, arguments: dict, servers: dict) -> dict:
     """Build a ready-to-use ``x402_retry_mcp_payment`` call that fixes a wrong Bazaar tool_name.
 
     The caller passed a discovered resource name; the correct retry targets the proxy tool with
     ``arguments={toolName, parameters}``. If ``arguments`` is already proxy-shaped we pass it
-    through (only the tool_name was wrong); otherwise we wrap it.
+    through (only the tool_name was wrong); otherwise we wrap it. Accepts a pre-loaded ``servers``
+    dict so the caller's config read is reused rather than repeated.
     """
-    proxy = _find_bazaar_proxy_tool() or "mcp_bazaar_proxy_tool_call"
+    proxy = _find_bazaar_proxy_tool(servers) or "mcp_bazaar_proxy_tool_call"
     if isinstance(arguments, dict) and "toolName" in arguments:
         fix_args = arguments
     else:
@@ -184,14 +190,16 @@ def x402_retry_mcp_payment(args: dict, **kwargs) -> str:
     payment_required = args.get("payment_required") or None
     cap = effective_cap(args.get("max_price_usdc"))
 
+    servers = _load_mcp_servers()
     try:
-        server_name, sanitized_suffix, scfg = resolve_server(tool_name)
+        server_name, sanitized_suffix, scfg = resolve_server(tool_name, servers)
     except KeyError as exc:
         # Self-correct the most common mistake: passing a Bazaar-*discovered* resource name
         # (x402_get_…) instead of the proxy tool that was actually called. Hand back a ready-to-run
         # call so the agent recovers in one step instead of bailing to x402_request.
+        # Pass the already-loaded servers dict to avoid a redundant config read.
         if _looks_like_bazaar_resource(tool_name):
-            return json.dumps(_bazaar_redirect(tool_name, arguments))
+            return json.dumps(_bazaar_redirect(tool_name, arguments, servers))
         return json.dumps({"error": str(exc)})
 
     server_url = scfg.get("url")
@@ -232,13 +240,8 @@ def x402_retry_mcp_payment(args: dict, **kwargs) -> str:
 
         if is_error:
             # Build a structured error the agent can reason about.
-            server_error = None
+            server_error = extract_server_error(content_parsed)
             if isinstance(content_parsed, dict):
-                server_error = (
-                    content_parsed.get("error")
-                    or content_parsed.get("message")
-                    or content_parsed.get("detail")
-                )
                 # Detect a second 402 from the upstream (payment rejected by the proxy/facilitator).
                 if content_parsed.get("accepts") or content_parsed.get("x402Version"):
                     server_error = server_error or "upstream returned another 402 (payment rejected by server/facilitator)"
