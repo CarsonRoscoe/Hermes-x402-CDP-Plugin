@@ -1,14 +1,20 @@
 name: hermes-x402
 version: 0.0.1
-description: x402 micropayments for Hermes — paid HTTP/MCP tools signed by a Coinbase MCP server.
+description: x402 micropayments for Hermes — paid HTTP/MCP tools + a self-custodial CDP server wallet.
 author: Coinbase
 kind: standalone
 
 # Tools surfaced to the agent (documentation/introspection; actual registration
-# happens in register(ctx)).
+# happens in register(ctx)). The cdp_* tools appear only under the "local" provider.
 provides_tools:
   - x402_request
   - x402_retry_mcp_payment
+  - cdp_wallet_status
+  - cdp_wallet_balance
+  - cdp_faucet
+  - cdp_onramp
+  - cdp_transfer
+  - cdp_payments
 
 # Lifecycle hooks this plugin attaches.
 provides_hooks:
@@ -18,9 +24,11 @@ provides_hooks:
 # Additional surfaces registered in register(ctx) (documented here for discoverability;
 # the manifest schema only formally tracks tools + hooks):
 #   - CLI:   hermes x402 {init,wallet,fund,balance,status,spend,payments}
-#   - slash: /x402 (wallet + signer + balance summary)
-#   - skill: x402-payments (bundled, read-only)
+#   - slash: /x402 (wallet + provider + balance summary)
+#   - skill: x402-payments (bundled; the variant matching x402.provider)
 
-# No required env: signing is delegated to the Coinbase MCP (OAuth in prod; a local
-# stdio fake in dev). For the remote transport, the OAuth/CAT bearer is read from
-# COINBASE_MCP_TOKEN, but the plugin loads fine without it.
+# Wallet provider (x402.provider in config.yaml):
+#   - "local" (default): self-custodial CDP server wallet + native cdp_* tools. Requires
+#     CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET in ~/.hermes/.env.
+#   - "coinbase_mcp": remote hosted Coinbase MCP signer (Coming Soon).
+# The plugin loads fine without credentials; the cdp_* tools report a clear error until set.

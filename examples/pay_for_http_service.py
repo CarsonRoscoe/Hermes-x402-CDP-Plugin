@@ -1,11 +1,10 @@
 """Pay for an x402-enabled HTTP service via the plugin.
 
 This calls the plugin's ``x402_request`` tool exactly as the Hermes agent would. The 402 ->
-sign -> retry flow is handled by the x402 SDK; the signature comes from the Coinbase MCP
-(the local ``fake-coinbase-mcp`` in dev). No keys live in this process.
+sign -> retry flow is handled by the x402 SDK; the signature comes from the self-custodial
+CDP server wallet managed by ``hermes_x402.cdp``.
 
 Run (see examples/README.md for setup):
-    pip install -e hermes-x402 -e fake-coinbase-mcp
     python examples/pay_for_http_service.py https://some-x402-endpoint.example/data
 """
 

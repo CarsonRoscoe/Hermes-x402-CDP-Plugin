@@ -1,18 +1,20 @@
-"""Internal connection to the Coinbase MCP server (signing + balance/identity reads).
+"""Internal connection to the remote Coinbase MCP server (Coming Soon).
 
-This is the plugin's *own* connection used for signing inside the paid tools — separate
-from the Coinbase MCP that onboarding also registers in ``mcp_servers`` for the agent to
-call natively. Transport + result parsing live in the shared ``mcp_client`` module.
+This module is wired for the ``coinbase_mcp`` provider, which is not yet available. When the
+hosted Coinbase MCP ships it will provide signing + wallet reads via this transport; the
+plugin will route to it in place of the local CDP wallet.
 
-Config: ``x402.coinbase_mcp`` in config.yaml ::
+Config (future, ``x402.coinbase_mcp`` in config.yaml) ::
 
     x402:
+      provider: coinbase_mcp         # switch from "local" when available
       coinbase_mcp:
-        transport: stdio            # or "remote"
-        command: fake-coinbase-mcp  # stdio: executable
-        args: []
-        url: https://mcp.coinbase.example/mcp   # remote
-        auth_token_env: COINBASE_MCP_TOKEN      # remote bearer (CAT)
+        transport: remote
+        url: https://mcp.coinbase.com/mcp
+        auth_token_env: COINBASE_MCP_TOKEN   # OAuth/CAT bearer
+
+Today, ``provider: local`` (the default) uses the CDP SDK in-process and never opens
+this connection.
 """
 
 from __future__ import annotations
@@ -28,30 +30,29 @@ logger = logging.getLogger(__name__)
 
 
 class CoinbaseMcpConnection:
-    """A per-call MCP client to the Coinbase MCP server."""
+    """A per-call MCP client to the remote Coinbase MCP server."""
 
     def __init__(self, cfg: dict | None = None) -> None:
-        self._cfg = cfg or config.coinbase_mcp_config()
+        raw = cfg or (plugin_cfg := config.plugin_config().get("coinbase_mcp") or {})
+        self._cfg = raw if cfg is not None else (plugin_cfg or {})
 
     @property
     def transport(self) -> str:
-        return str(self._cfg.get("transport") or "stdio")
+        return str(self._cfg.get("transport") or "remote")
 
     def _session(self):
-        """Open a session to the Coinbase MCP using the configured transport."""
-        if self.transport == "remote":
-            url = self._cfg.get("url")
-            if not url:
-                raise RuntimeError("x402.coinbase_mcp.url is required for remote transport")
-            headers = {}
-            token = os.getenv(self._cfg.get("auth_token_env") or "COINBASE_MCP_TOKEN")
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-            return open_session(url=url, headers=headers or None)
-        return open_session(
-            command=self._cfg.get("command") or "fake-coinbase-mcp",
-            args=self._cfg.get("args") or [],
-        )
+        """Open a session to the remote Coinbase MCP."""
+        url = self._cfg.get("url")
+        if not url:
+            raise RuntimeError(
+                "Coinbase MCP provider is Coming Soon. "
+                "Use provider: local (the default) for self-custodial CDP wallet tools."
+            )
+        headers = {}
+        token = os.getenv(self._cfg.get("auth_token_env") or "COINBASE_MCP_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return open_session(url=url, headers=headers or None)
 
     async def call_tool(self, name: str, arguments: dict | None = None) -> dict:
         """Call a Coinbase MCP tool and return its JSON result. Await directly."""

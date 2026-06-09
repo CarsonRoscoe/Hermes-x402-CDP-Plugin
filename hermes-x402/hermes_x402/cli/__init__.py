@@ -20,7 +20,7 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     """Build the ``hermes x402`` argparse tree."""
     subs = subparser.add_subparsers(dest="x402_command")
 
-    subs.add_parser("init", help="Onboarding: connect signer + register MCP servers")
+    subs.add_parser("init", help="Onboarding: choose wallet provider, provision wallet, register MCP servers")
     subs.add_parser("wallet", help="Show the x402 wallet address")
     subs.add_parser("fund", help="Print address + instructions to add USDC on Base")
     subs.add_parser("balance", help="Show on-chain USDC balance")

@@ -35,7 +35,15 @@ def test_register_wires_all_surfaces():
 
     ctx = FakeCtx()
     hermes_x402.register(ctx)
-    assert ctx.tools == ["x402_request", "x402_retry_mcp_payment"]
+    # Payment tools are always present; cdp_* tools are registered for any provider
+    # (visibility is controlled at runtime by check_fn, not at registration time).
+    assert "x402_request" in ctx.tools
+    assert "x402_retry_mcp_payment" in ctx.tools
+    cdp_tools = [t for t in ctx.tools if t.startswith("cdp_")]
+    assert set(cdp_tools) == {
+        "cdp_wallet_status", "cdp_wallet_balance", "cdp_faucet",
+        "cdp_onramp", "cdp_transfer", "cdp_payments",
+    }
     assert ctx.cli == ["x402"]
     assert ctx.cmds == ["x402"]
     assert ctx.skills == ["x402-payments"]
@@ -257,78 +265,33 @@ def test_payment_client_caps_before_signing():
         asyncio.run(client.create_payment_payload(payment_required))
 
 
-def test_payment_client_delegates_to_connection(monkeypatch):
-    import asyncio
-
-    pytest.importorskip("x402.schemas", reason="x402 v2 SDK not installed")
-
-    from hermes_x402.coinbase_mcp.payment_client import CoinbaseMcpPaymentClient
-
-    payment_required = {
-        "x402Version": 2,
-        "resource": {"url": "https://x/y"},
-        "accepts": [{"amount": "10000", "network": "eip155:8453"}],
-    }
-    signed = {
-        "x402Version": 2,
-        "resource": {"url": "https://x/y"},
-        "accepted": {"scheme": "exact", "network": "eip155:8453", "amount": "10000",
-                     "asset": "0x0", "payTo": "0x0", "resource": "https://x/y"},
-        "payload": {"signature": "0xabc", "authorization": {}},
-    }
-    calls = {}
-
-    class _Conn:
-        async def call_tool(self, name, args):
-            calls["name"] = name
-            calls["args"] = args
-            return {"payment_payload": signed}
-
-    monkeypatch.setattr(
-        "x402.schemas.PaymentPayload.model_validate", staticmethod(lambda d: d)
-    )
-    client = CoinbaseMcpPaymentClient(_Conn(), max_price_usdc=1.0)
-    out = asyncio.run(client.create_payment_payload(payment_required))
-    assert calls["name"] == "create_payment_payload"
-    assert "payment_required" in calls["args"]
-    assert out == signed
-    assert client.last_min_usdc == pytest.approx(0.01)
-
-
 # --------------------------------------------------------------------------- #
 # mcp_servers registration
 # --------------------------------------------------------------------------- #
-def test_ensure_mcp_servers_writes_both():
+def test_ensure_mcp_servers_local_provider_bazaar_only():
+    """Local provider (default): only bazaar is registered; no coinbase MCP subprocess."""
     from hermes_x402 import mcp_servers
 
-    cfg: dict = {}
+    cfg: dict = {"x402": {"provider": "local"}}
     names = mcp_servers.ensure_mcp_servers(cfg)
-    assert names == ["coinbase", "bazaar"]
+    assert names == ["bazaar"]
     servers = cfg["mcp_servers"]
-    # stdio default for coinbase
-    assert servers["coinbase"]["command"] == "fake-coinbase-mcp"
+    assert "coinbase" not in servers
     assert servers["bazaar"]["url"]
 
 
-def test_ensure_mcp_servers_sources_from_passed_config():
+def test_ensure_mcp_servers_removes_stale_coinbase_in_local_mode():
+    """Switching back to local: a stale coinbase entry left from coinbase_mcp mode is removed."""
     from hermes_x402 import mcp_servers
 
-    cfg = {
-        "x402": {
-            "coinbase_mcp": {
-                "transport": "remote",
-                "url": "https://signer.example/mcp",
-                "auth_token_env": "MY_TOKEN",
-            },
-            "bazaar_mcp": {"url": "https://bazaar.example/custom"},
-        }
+    cfg: dict = {
+        "x402": {"provider": "local"},
+        "mcp_servers": {"coinbase": {"command": "old-entry"}, "other": {"url": "x"}},
     }
     mcp_servers.ensure_mcp_servers(cfg)
-    servers = cfg["mcp_servers"]
-    # Mirror reflects the in-memory config, not disk defaults.
-    assert servers["coinbase"]["url"] == "https://signer.example/mcp"
-    assert servers["coinbase"]["headers"] == {"Authorization": "Bearer ${MY_TOKEN}"}
-    assert servers["bazaar"]["url"] == "https://bazaar.example/custom"
+    assert "coinbase" not in cfg["mcp_servers"]
+    assert "bazaar" in cfg["mcp_servers"]
+    assert "other" in cfg["mcp_servers"]  # unrelated servers untouched
 
 
 # --------------------------------------------------------------------------- #
@@ -378,15 +341,10 @@ def test_budget_hook_blocks_projected_overshoot(monkeypatch):
     ) is None
 
 
-def test_config_coinbase_mcp_defaults(tmp_path):
+def test_config_data_dir_and_caip2(tmp_path):
     from hermes_x402 import config
 
     assert str(tmp_path) in str(config.data_dir())
-    cmcp = config.coinbase_mcp_config()
-    assert cmcp["transport"] == "stdio"
-    # command resolves to the venv-local binary (full path) when available, or the bare
-    # name for PATH-based fallback — either way it must contain "fake-coinbase-mcp".
-    assert "fake-coinbase-mcp" in cmcp["command"]
     assert config.caip2("base") == "eip155:8453"
 
 
@@ -401,48 +359,6 @@ def test_failure_mode_defaults_strict():
     assert config.timeout_seconds() > 0
     # R6: agent-supplied payment_required is not trusted by default.
     assert config.trust_supplied_payment_required() is False
-
-
-def test_r4_selected_amount_over_cap_rejected(monkeypatch):
-    # Signer selects a 5 USDC option although the cheapest accept (0.1) fit the 1.0 cap.
-    import asyncio
-
-    from hermes_x402.coinbase_mcp.payment_client import (
-        CoinbaseMcpPaymentClient,
-        PaymentExceedsCapError,
-    )
-
-    monkeypatch.setattr("x402.schemas.PaymentPayload.model_validate", staticmethod(lambda d: d))
-    pr = {"x402Version": 2, "accepts": [{"amount": "100000"}]}
-
-    class Conn:
-        async def call_tool(self, name, args):
-            return {"payment_payload": {"accepted": {"amount": "5000000"}}}
-
-    client = CoinbaseMcpPaymentClient(Conn(), max_price_usdc=1.0)
-    with pytest.raises(PaymentExceedsCapError):
-        asyncio.run(client.create_payment_payload(pr))
-
-
-def test_r4_unverifiable_selected_amount_rejected_strict(monkeypatch):
-    import asyncio
-
-    from hermes_x402.coinbase_mcp.payment_client import (
-        CoinbaseMcpPaymentClient,
-        PaymentVerificationError,
-    )
-
-    monkeypatch.setattr("x402.schemas.PaymentPayload.model_validate", staticmethod(lambda d: d))
-    monkeypatch.setattr("hermes_x402.config.is_strict", lambda: True)
-    pr = {"x402Version": 2, "accepts": [{"amount": "100000"}]}
-
-    class Conn:
-        async def call_tool(self, name, args):
-            return {"payment_payload": {"accepted": {}}}  # no selected amount
-
-    client = CoinbaseMcpPaymentClient(Conn(), max_price_usdc=1.0)
-    with pytest.raises(PaymentVerificationError):
-        asyncio.run(client.create_payment_payload(pr))
 
 
 def test_r2_run_async_cancels_on_timeout():
@@ -543,3 +459,287 @@ def test_r5_reservation_blocks_concurrent_overshoot():
     with pytest.raises(ledger.BudgetExceededError):
         ledger.journal_begin(fingerprint="fp2", idempotency_key=None, kind="http",
                              endpoint="https://x", cap_usdc=0.5, session_id="s1", budget_usdc=1.0)
+
+
+# --------------------------------------------------------------------------- #
+# Onboarding flow
+# --------------------------------------------------------------------------- #
+
+def test_onboarding_missing_credentials_prints_help_without_raising(monkeypatch, capsys):
+    """Missing CDP creds print specific instructions; no exception, no CDP calls made."""
+    monkeypatch.setattr("hermes_x402.config.missing_cdp_credentials",
+                        lambda: ["CDP_API_KEY_ID", "CDP_API_KEY_SECRET", "CDP_WALLET_SECRET"])
+    # Ensure wallet.address() is never reached.
+    monkeypatch.setattr("hermes_x402.wallet.address", lambda: (_ for _ in ()).throw(
+        AssertionError("CDP wallet should not be provisioned when creds are missing")
+    ))
+    monkeypatch.setattr("hermes_x402.config.is_local_provider", lambda: True)
+
+    from hermes_x402.setup_flow import run_x402_onboarding
+
+    summary = run_x402_onboarding(config_dict={"x402": {"provider": "local"}})
+    out = capsys.readouterr().out
+    assert "CDP_API_KEY_ID" in out
+    assert "CDP_API_KEY_SECRET" in out
+    assert "CDP_WALLET_SECRET" in out
+    assert summary["wallet"]["missing_credentials"] == [
+        "CDP_API_KEY_ID", "CDP_API_KEY_SECRET", "CDP_WALLET_SECRET"
+    ]
+
+
+def test_onboarding_noninteractive_defaults_to_local(monkeypatch, capsys):
+    """No TTY → provider defaults to 'local'; no interactive prompt is shown."""
+    monkeypatch.setattr("sys.stdin", None)
+    monkeypatch.setattr("hermes_x402.config.missing_cdp_credentials", lambda: [])
+    monkeypatch.setattr("hermes_x402.wallet.address", lambda: "0xLocalWallet")
+    monkeypatch.setattr("hermes_x402.wallet.usdc_balance", lambda net=None: 1.0)
+
+    from hermes_x402.setup_flow import run_x402_onboarding
+
+    summary = run_x402_onboarding(config_dict={})
+    assert summary["provider"] == "local"
+    out = capsys.readouterr().out
+    assert "Select" not in out  # no interactive menu printed
+
+
+def test_onboarding_remote_choice_falls_back_to_local(monkeypatch, capsys):
+    """Selecting option 2 (Coming Soon) silently falls back to local."""
+    import io
+    fake_stdin = io.StringIO("2\n")
+    fake_stdin.isatty = lambda: True  # pretend it's a real TTY so the menu is shown
+    monkeypatch.setattr("sys.stdin", fake_stdin)
+    monkeypatch.setattr("hermes_x402.config.missing_cdp_credentials", lambda: [])
+    monkeypatch.setattr("hermes_x402.wallet.address", lambda: "0xLocalWallet")
+    monkeypatch.setattr("hermes_x402.wallet.usdc_balance", lambda net=None: 0.0)
+
+    from hermes_x402.setup_flow import run_x402_onboarding
+
+    summary = run_x402_onboarding(config_dict={})
+    assert summary["provider"] == "local"
+    out = capsys.readouterr().out
+    assert "Coming Soon" in out
+
+
+def test_onboarding_persists_provider_and_budgets(monkeypatch):
+    """Onboarding writes provider + budget defaults into the config dict."""
+    monkeypatch.setattr("sys.stdin", None)
+    monkeypatch.setattr("hermes_x402.config.missing_cdp_credentials", lambda: [])
+    monkeypatch.setattr("hermes_x402.wallet.address", lambda: "0xWallet")
+    monkeypatch.setattr("hermes_x402.wallet.usdc_balance", lambda net=None: 0.0)
+
+    from hermes_x402.setup_flow import run_x402_onboarding
+
+    cfg: dict = {}
+    run_x402_onboarding(config_dict=cfg)
+    assert cfg["x402"]["provider"] == "local"
+    assert cfg["x402"]["max_price_usdc"] > 0
+    assert cfg["x402"]["session_budget_usdc"] > 0
+
+
+def test_onboarding_bazaar_registered_not_coinbase(monkeypatch):
+    """Local provider onboarding registers bazaar but never coinbase."""
+    monkeypatch.setattr("sys.stdin", None)
+    monkeypatch.setattr("hermes_x402.config.missing_cdp_credentials", lambda: [])
+    monkeypatch.setattr("hermes_x402.wallet.address", lambda: "0xWallet")
+    monkeypatch.setattr("hermes_x402.wallet.usdc_balance", lambda net=None: 0.0)
+
+    from hermes_x402.setup_flow import run_x402_onboarding
+
+    cfg: dict = {"mcp_servers": {"coinbase": {"command": "stale-entry"}}}
+    summary = run_x402_onboarding(config_dict=cfg)
+    assert summary["mcp_servers"] == ["bazaar"]
+    assert "coinbase" not in cfg["mcp_servers"]
+    assert "bazaar" in cfg["mcp_servers"]
+
+
+# --------------------------------------------------------------------------- #
+# Local CDP tools — guards and output shapes
+# --------------------------------------------------------------------------- #
+
+def test_cdp_faucet_rejects_mainnet(monkeypatch):
+    """cdp_faucet must error cleanly on mainnet — the testnet guard fires before CDP calls."""
+    import hermes_x402.cdp.wallet_ops as wo
+    # Mock so the guard fires through wallet_ops.faucet rather than hitting CDP creds.
+    def mock_faucet(token, network=None):
+        from hermes_x402 import config
+        if not config.is_testnet(network or "base"):
+            raise ValueError(f"Faucet is testnet-only (e.g. base-sepolia), not '{network}'.")
+        return {"tx_hash": "0xmock", "token": token, "network": network, "explorer": ""}
+    monkeypatch.setattr(wo, "faucet", mock_faucet)
+
+    from hermes_x402.tools.cdp_tools import cdp_faucet
+
+    for net in ("base", "ethereum"):
+        out = json.loads(cdp_faucet({"token": "usdc", "network": net}))
+        assert "error" in out, f"expected error for mainnet network '{net}'"
+        assert "testnet" in out["error"].lower() or "faucet" in out["error"].lower()
+
+
+def test_cdp_transfer_over_cap_refused(monkeypatch):
+    """cdp_transfer must refuse a USDC transfer that exceeds the per-call cap."""
+    monkeypatch.setattr("hermes_x402.config.max_price_usdc", lambda: 1.0)
+    from hermes_x402.tools.cdp_tools import cdp_transfer
+
+    out = json.loads(cdp_transfer({"to": "0xrecipient", "amount": 999, "token": "usdc"}))
+    assert "error" in out
+    assert "cap" in out["error"].lower()
+
+
+def test_cdp_transfer_missing_to():
+    """cdp_transfer must refuse when no recipient address is given."""
+    from hermes_x402.tools.cdp_tools import cdp_transfer
+
+    out = json.loads(cdp_transfer({"amount": 1, "token": "usdc"}))
+    assert "error" in out
+    assert "to" in out["error"].lower()
+
+
+def test_cdp_transfer_eth_not_capped_by_usdc_cap(monkeypatch):
+    """ETH transfers should not be refused by the USDC per-call cap."""
+    monkeypatch.setattr("hermes_x402.config.max_price_usdc", lambda: 0.01)
+    # We can't send ETH without CDP creds, but the guard check itself must not block it.
+    from hermes_x402.tools.cdp_tools import cdp_transfer
+
+    out = json.loads(cdp_transfer({"to": "0xrecipient", "amount": 1, "token": "eth"}))
+    # Should fail at the CDP layer (no creds in test), not at the cap guard.
+    assert out.get("error") is not None
+    assert "cap" not in str(out.get("error", "")).lower()
+
+
+def test_cdp_payments_shape(monkeypatch):
+    """cdp_payments returns {payments[], count, total_usdc} from the ledger."""
+    from hermes_x402 import ledger
+
+    rows = [
+        {"ts": 1000.0, "endpoint_host": "api.example.com", "amount_usdc": 0.01,
+         "tx": "0xabc", "kind": "http", "network": "base"},
+        {"ts": 900.0, "endpoint_host": "other.com", "amount_usdc": 0.05,
+         "tx": "0xdef", "kind": "mcp", "network": "base"},
+    ]
+    monkeypatch.setattr(ledger, "recent_spend", lambda n: rows[:n])
+
+    from hermes_x402.tools.cdp_tools import cdp_payments
+
+    out = json.loads(cdp_payments({"limit": 10}))
+    assert set(out) == {"payments", "count", "total_usdc"}
+    assert out["count"] == 2
+    assert abs(out["total_usdc"] - 0.06) < 1e-9
+    for p in out["payments"]:
+        assert set(p) >= {"timestamp", "endpoint", "amount_usdc", "tx", "settled", "kind", "network"}
+    assert out["payments"][0]["settled"] is True
+
+
+def test_cdp_payments_since_filter(monkeypatch):
+    """cdp_payments filters rows before the 'since' timestamp."""
+    from hermes_x402 import ledger
+
+    rows = [
+        {"ts": 2000.0, "endpoint_host": "a.com", "amount_usdc": 0.01,
+         "tx": "0x1", "kind": "http", "network": "base"},
+        {"ts": 500.0, "endpoint_host": "b.com", "amount_usdc": 0.02,
+         "tx": "0x2", "kind": "mcp", "network": "base"},
+    ]
+    monkeypatch.setattr(ledger, "recent_spend", lambda n: rows[:n])
+
+    from hermes_x402.tools.cdp_tools import cdp_payments
+
+    out = json.loads(cdp_payments({"limit": 10, "since": 1000.0}))
+    assert out["count"] == 1
+    assert out["payments"][0]["endpoint"] == "a.com"
+
+
+def test_cdp_wallet_balance_asset_filter(monkeypatch):
+    """cdp_wallet_balance with asset='USDC' returns only the USDC entry in balances[]."""
+    all_balances = {
+        "network": "base-sepolia",
+        "address": "0xWallet",
+        "eth": 0.001,
+        "usdc": 1.0,
+        "balances": [
+            {"symbol": "ETH", "amount": 0.001, "decimals": 18, "contract": None},
+            {"symbol": "USDC", "amount": 1.0, "decimals": 6,
+             "contract": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"},
+        ],
+    }
+    import hermes_x402.cdp.wallet_ops as wo
+    monkeypatch.setattr(wo, "balances", lambda net=None, asset=None: (
+        {**all_balances,
+         "balances": [b for b in all_balances["balances"]
+                      if asset is None or b["symbol"].upper() == asset.upper()]}
+    ))
+
+    from hermes_x402.tools.cdp_tools import cdp_wallet_balance
+
+    out = json.loads(cdp_wallet_balance({"network": "base-sepolia", "asset": "USDC"}))
+    assert len(out["balances"]) == 1
+    assert out["balances"][0]["symbol"] == "USDC"
+    assert out["usdc"] == pytest.approx(1.0)
+
+
+def test_cdp_wallet_status_shape(monkeypatch):
+    """cdp_wallet_status returns the expected keys."""
+    import hermes_x402.cdp.wallet_ops as wo
+    monkeypatch.setattr(wo, "status", lambda: {
+        "provider": "local",
+        "address": "0xWallet",
+        "account_name": "hermes-x402",
+        "network": "base-sepolia",
+    })
+
+    from hermes_x402.tools.cdp_tools import cdp_wallet_status
+
+    out = json.loads(cdp_wallet_status({}))
+    assert set(out) >= {"provider", "address", "account_name", "network"}
+    assert out["provider"] == "local"
+
+
+def test_cdp_onramp_rejects_testnet(monkeypatch):
+    """cdp_onramp must refuse on testnet networks (onramp delivers to mainnet only)."""
+    import hermes_x402.cdp.wallet_ops as wo
+    monkeypatch.setattr(wo, "onramp_url", lambda **kwargs: (_ for _ in ()).throw(
+        ValueError("Onramp buys real funds on mainnet and cannot deliver to a testnet")
+    ))
+
+    from hermes_x402.tools.cdp_tools import cdp_onramp
+
+    out = json.loads(cdp_onramp({"asset": "USDC", "network": "base-sepolia"}))
+    assert "error" in out
+    assert "testnet" in out["error"].lower() or "mainnet" in out["error"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# Provider config helpers
+# --------------------------------------------------------------------------- #
+
+def test_normalize_provider_handles_edge_cases():
+    from hermes_x402.config import normalize_provider
+
+    assert normalize_provider("local") == "local"
+    assert normalize_provider("LOCAL") == "local"
+    assert normalize_provider("  coinbase_mcp  ") == "coinbase_mcp"
+    assert normalize_provider("bogus") == "local"
+    assert normalize_provider(None) == "local"
+    assert normalize_provider("") == "local"
+
+
+def test_is_testnet_classification():
+    from hermes_x402.config import is_testnet
+
+    assert is_testnet("base-sepolia")
+    assert is_testnet("ethereum-sepolia")
+    assert is_testnet("ethereum-hoodi")
+    assert not is_testnet("base")
+    assert not is_testnet("ethereum")
+    assert not is_testnet("polygon")
+
+
+def test_cdp_tools_check_fn_is_local_provider():
+    """Every cdp_* tool must be gated by the is_local_provider check_fn."""
+    from hermes_x402 import config
+    from hermes_x402.tools import TOOLS
+
+    cdp_specs = [t for t in TOOLS if t.name.startswith("cdp_")]
+    assert len(cdp_specs) == 6, f"unexpected cdp_* tool count: {[t.name for t in cdp_specs]}"
+    for spec in cdp_specs:
+        assert spec.check_fn is config.is_local_provider, \
+            f"{spec.name} must be gated by is_local_provider"

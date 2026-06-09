@@ -15,23 +15,18 @@ BAZAAR_SERVER_NAME = "bazaar"
 
 
 def _coinbase_entry(x402: dict) -> dict:
-    """Translate the ``coinbase_mcp`` config into an mcp_servers entry.
+    """Translate the ``coinbase_mcp`` config into an mcp_servers entry (remote only).
 
-    Merges the passed ``x402`` section (authoritative, in-memory) over ``DEFAULTS`` so the
-    mirror never disagrees with what onboarding is about to persist.
+    The remote Coinbase MCP is Coming Soon. This entry is written only when
+    ``provider == "coinbase_mcp"`` so it never appears in local mode.
     """
-    cb = dict(config.DEFAULTS["coinbase_mcp"])
-    section = x402.get("coinbase_mcp")
-    if isinstance(section, dict):
-        cb.update(section)
-    if (cb.get("transport") or "stdio") == "remote":
-        entry: dict = {"url": cb.get("url") or ""}
-        token_env = cb.get("auth_token_env")
-        if token_env:
-            # Hermes expands ${ENV} in headers; keep the bearer out of the committed file.
-            entry["headers"] = {"Authorization": "Bearer ${%s}" % token_env}
-        return entry
-    return {"command": cb.get("command") or "fake-coinbase-mcp", "args": list(cb.get("args") or [])}
+    section = x402.get("coinbase_mcp") or {}
+    url = section.get("url") or ""
+    entry: dict = {"url": url}
+    token_env = section.get("auth_token_env") or "COINBASE_MCP_TOKEN"
+    # Hermes expands ${ENV} in headers; keep the bearer out of the committed file.
+    entry["headers"] = {"Authorization": "Bearer ${%s}" % token_env}
+    return entry
 
 
 def _bazaar_entry(x402: dict) -> dict:
@@ -42,17 +37,31 @@ def _bazaar_entry(x402: dict) -> dict:
 
 
 def ensure_mcp_servers(config_dict: dict) -> list[str]:
-    """Add/refresh the coinbase + bazaar entries under ``mcp_servers``. Returns the names.
+    """Reconcile the ``mcp_servers`` entries to the active wallet provider. Returns names.
 
-    Sources the canonical ``x402.*`` config from the passed ``config_dict`` (authoritative,
-    in-memory) so the mirror matches what onboarding persists, falling back to disk-derived
-    defaults only when the section is absent. Mutates ``config_dict`` in place.
+    Exactly one wallet surface exists at a time:
+    - ``provider == "coinbase_mcp"``: add/refresh the ``coinbase`` MCP entry (the agent calls
+      ``mcp_coinbase_*``).
+    - ``provider == "local"`` (default): remove any stale ``coinbase`` entry — signing and
+      wallet management run in-process via the native ``cdp_*`` tools instead.
+
+    The ``bazaar`` discovery/proxy MCP is registered in both modes. Sources the canonical
+    ``x402.*`` config from the passed ``config_dict`` (authoritative, in-memory). Mutates
+    ``config_dict`` in place.
     """
     x402 = config_dict.get("x402") if isinstance(config_dict.get("x402"), dict) else {}
     servers = config_dict.setdefault("mcp_servers", {})
     if not isinstance(servers, dict):
         servers = {}
         config_dict["mcp_servers"] = servers
-    servers[COINBASE_SERVER_NAME] = _coinbase_entry(x402)
+
+    provider = config.normalize_provider(x402.get("provider"))
     servers[BAZAAR_SERVER_NAME] = _bazaar_entry(x402)
-    return [COINBASE_SERVER_NAME, BAZAAR_SERVER_NAME]
+
+    if provider == "coinbase_mcp":
+        servers[COINBASE_SERVER_NAME] = _coinbase_entry(x402)
+        return [COINBASE_SERVER_NAME, BAZAAR_SERVER_NAME]
+
+    # Local provider: ensure the remote signer MCP is not also present.
+    servers.pop(COINBASE_SERVER_NAME, None)
+    return [BAZAAR_SERVER_NAME]

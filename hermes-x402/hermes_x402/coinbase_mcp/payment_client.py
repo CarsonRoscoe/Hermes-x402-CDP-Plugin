@@ -132,16 +132,26 @@ class CoinbaseMcpPaymentClient:
         *,
         max_price_usdc: float | None = None,
     ) -> None:
-        self._conn = connection or get_connection()
+        # The MCP connection is only used by the "coinbase_mcp" provider; the local
+        # provider signs in-process via the CDP SDK. Resolve lazily so local mode never
+        # spins up an MCP connection it won't use.
+        self._connection = connection
         self._cap = max_price_usdc or 0.0
         #: price of the last requirement set seen, for ledger/reporting.
         self.last_min_usdc: float | None = None
 
+    @property
+    def _conn(self) -> CoinbaseMcpConnection:
+        if self._connection is None:
+            self._connection = get_connection()
+        return self._connection
+
     async def create_payment_payload(self, payment_required: Any) -> Any:
-        """Ask the Coinbase MCP to sign; return a validated ``PaymentPayload``.
+        """Sign via the active wallet provider; return a validated ``PaymentPayload``.
 
         Budget is checked first (no x402 import needed) so an over-cap call is refused
-        before we ever contact the signer.
+        before we ever contact the signer. Signing is delegated to the provider backend:
+        the local CDP signer (in-process) or the Coinbase MCP (remote).
         """
         self.last_min_usdc = min_usdc_in_accepts(payment_required)
         if self._cap > 0 and self.last_min_usdc is not None and self.last_min_usdc > self._cap:
@@ -157,10 +167,16 @@ class CoinbaseMcpPaymentClient:
 
             pr_dict = PaymentRequired.model_validate(payment_required).model_dump(by_alias=True)
 
-        result = await self._conn.call_tool("create_payment_payload", {"payment_required": pr_dict})
+        if config.is_local_provider():
+            from ..cdp import signer as cdp_signer
 
-        # Tool may return the PaymentPayload directly or under "payment_payload".
-        payload_dict = result.get("payment_payload", result)
+            payload_dict = await cdp_signer.create_payment_payload_async(pr_dict)
+        else:
+            result = await self._conn.call_tool(
+                "create_payment_payload", {"payment_required": pr_dict}
+            )
+            # Tool may return the PaymentPayload directly or under "payment_payload".
+            payload_dict = result.get("payment_payload", result)
         # Validate against the version the signer actually returned: a v1 endpoint yields
         # a PaymentPayloadV1 (scheme/network/payload at top level, no `accepted`), a v2
         # endpoint a PaymentPayload. Default to v2 when the version is absent.

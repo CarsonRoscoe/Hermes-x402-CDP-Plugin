@@ -1,10 +1,9 @@
-"""Read facade over the Coinbase MCP's existing tools.
+"""Coinbase MCP wallet reads (address + USDC balance).
 
-We add exactly one new tool to the Coinbase MCP (``create_payment_payload``). For
-balance/identity we reuse the server's existing reads and match their names — today's
-hosted ``coinbase-mcp`` exposes ``coinbase_balance`` and ``coinbase_status``. These
-degrade gracefully (return ``None``) when a read isn't exposed, so the payment path never
-depends on them.
+Used only by the ``coinbase_mcp`` provider; the provider-neutral entry point is
+:mod:`hermes_x402.wallet`. Reuses the hosted Coinbase MCP's existing tools
+(``coinbase_status`` / ``coinbase_balance``) and degrades gracefully (returns ``None``)
+when a read isn't available, so the payment path never depends on them.
 """
 
 from __future__ import annotations
@@ -38,8 +37,8 @@ def address() -> str | None:
 def usdc_balance(network: str = "base") -> float | None:
     """Best-effort on-chain USDC balance via ``coinbase_balance``.
 
-    Returns 0.0 when the tool responds but the wallet has no USDC yet (unfunded).
-    Returns None only when the tool call itself failed (signer unreachable).
+    Returns 0.0 when the tool responds but the wallet has no USDC yet (unfunded). Returns
+    None only when the tool call itself failed (signer unreachable).
     """
     result = _call("coinbase_balance", {"network": network})
     if result is None:

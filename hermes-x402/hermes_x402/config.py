@@ -9,7 +9,6 @@ available (never hardcode ``~/.hermes`` — that breaks profiles), and fall back
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 
@@ -60,19 +59,16 @@ EVM_CAIP2 = {"base": "eip155:8453", "base-sepolia": "eip155:84532"}
 # Default timeout: 60s per paid operation.
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
+# Wallet providers. "local" (self-custodial CDP server wallet via the CDP SDK, the only
+# implemented provider) or "coinbase_mcp" (remote hosted Coinbase MCP — coming soon).
+WALLET_PROVIDERS = ("local", "coinbase_mcp")
 
-def _default_signer_command() -> str:
-    """Resolve the fake-coinbase-mcp binary at config-read time.
+# Substrings that mark a network as a testnet (faucet-eligible; onramp-ineligible).
+_TESTNET_MARKERS = ("sepolia", "hoodi", "testnet", "amoy", "mumbai", "fuji", "devnet")
 
-    Prefers the binary installed alongside this package (same venv). This matters when the
-    plugin runs inside Hermes: the Hermes venv is not necessarily on PATH, but the binary
-    was installed into the same venv as the plugin itself.
-    """
-    # Same directory as the Python executable Hermes is using.
-    venv_bin = Path(sys.executable).parent / "fake-coinbase-mcp"
-    if venv_bin.exists():
-        return str(venv_bin)
-    return "fake-coinbase-mcp"  # fall back to PATH for standalone installs
+# CDP credentials the local provider needs (self-custodial CDP server wallet).
+CDP_CREDENTIAL_ENV = ("CDP_API_KEY_ID", "CDP_API_KEY_SECRET", "CDP_WALLET_SECRET")
+DEFAULT_CDP_ACCOUNT_NAME = "hermes-x402"
 
 
 def caip2(net: str | None = None) -> str:
@@ -81,6 +77,11 @@ def caip2(net: str | None = None) -> str:
 
 # Defaults; each is overridable under the `x402:` section of config.yaml.
 DEFAULTS = {
+    # Wallet/signing provider. "local" = self-custodial CDP server wallet + native cdp_*
+    # tools (implemented). "coinbase_mcp" = remote hosted Coinbase MCP (coming soon).
+    "provider": "local",
+    # CDP server-wallet account name used by the local provider.
+    "cdp_account_name": DEFAULT_CDP_ACCOUNT_NAME,
     "network": "base-sepolia",  # testnet default; change to "base" for mainnet
     "max_price_usdc": 1.0,  # per-call cap
     "session_budget_usdc": 10.0,  # cumulative cap per session
@@ -94,14 +95,6 @@ DEFAULTS = {
     # payment_required and always re-probes the upstream server in-process, so a forged
     # requirement cannot redirect a payment. Set True only if you trust the caller.
     "trust_supplied_payment_required": False,
-    # Connection to the Coinbase MCP that signs x402 payloads.
-    "coinbase_mcp": {
-        "transport": "stdio",  # "stdio" (dev fake) | "remote" (hosted, OAuth)
-        "command": "",         # resolved at runtime by _default_signer_command()
-        "args": [],
-        "url": "",  # remote: HTTP/SSE endpoint
-        "auth_token_env": "COINBASE_MCP_TOKEN",  # remote: env var holding the OAuth/CAT bearer
-    },
     # CDP Bazaar MCP (discovery + paid proxy). No auth; streamable HTTP.
     "bazaar_mcp": {
         "url": BAZAAR_MCP_URL,
@@ -131,15 +124,61 @@ def network() -> str:
     return str(plugin_config().get("network") or "base")
 
 
-def coinbase_mcp_config() -> dict:
-    cfg = plugin_config().get("coinbase_mcp")
-    base = dict(DEFAULTS["coinbase_mcp"])
-    if isinstance(cfg, dict):
-        base.update(cfg)
-    # If command is empty/unset, resolve the venv-local binary at call time.
-    if not base.get("command"):
-        base["command"] = _default_signer_command()
-    return base
+def is_testnet(net: str | None = None) -> bool:
+    """True when ``net`` (default: the configured network) is a testnet."""
+    return any(m in str(net or network()).lower() for m in _TESTNET_MARKERS)
+
+
+def normalize_provider(value: object) -> str:
+    """Coerce a raw provider value to a valid one (default ``"local"``)."""
+    p = str(value or "local").strip().lower()
+    return p if p in WALLET_PROVIDERS else "local"
+
+
+def wallet_provider() -> str:
+    """Active wallet provider: ``"local"`` (default) or ``"coinbase_mcp"``."""
+    return normalize_provider(plugin_config().get("provider"))
+
+
+def is_local_provider() -> bool:
+    """True when the self-custodial local CDP wallet/tools are active."""
+    return wallet_provider() == "local"
+
+
+def cdp_account_name() -> str:
+    """CDP server-wallet account name for the local provider (config > env > default)."""
+    cfg = plugin_config().get("cdp_account_name")
+    return str(cfg or os.getenv("CDP_ACCOUNT_NAME") or DEFAULT_CDP_ACCOUNT_NAME)
+
+
+def load_dotenv_into_env() -> None:
+    """Best-effort: load ``~/.hermes/.env`` (profile-aware) into ``os.environ``.
+
+    Idempotent and never overrides an already-set variable. Hermes normally loads this
+    itself, but the local CDP provider also runs standalone (examples/tests) where the
+    env may not have been inherited.
+    """
+    env_path = hermes_home() / ".env"
+    try:
+        if not env_path.is_file():
+            return
+        for raw in env_path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception:
+        pass
+
+
+def missing_cdp_credentials() -> list[str]:
+    """Return the CDP credential env vars that are not set (after loading ~/.hermes/.env)."""
+    load_dotenv_into_env()
+    return [k for k in CDP_CREDENTIAL_ENV if not os.getenv(k)]
 
 
 def bazaar_mcp_url() -> str:

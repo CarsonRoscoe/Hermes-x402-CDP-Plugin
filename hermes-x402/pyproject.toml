@@ -21,6 +21,8 @@ classifiers = [
 # bundled plugin never widens the host's supply-chain surface unexpectedly.
 dependencies = [
     "x402[httpx,evm,mcp,extensions]>=2.11,<3",
+    # Local (self-custodial) wallet provider: CDP server wallet + wallet-management tools.
+    "cdp-sdk>=1,<2",
     "pyyaml>=6,<7",
 ]
 

@@ -10,8 +10,8 @@ In the `setup` subparser (next to `--portal`):
 setup_parser.add_argument(
     "--coinbase",
     action="store_true",
-    help="One-shot x402 setup: connect the Coinbase MCP signer and register the "
-         "Coinbase/Bazaar MCP servers. Skips the rest of the wizard.",
+    help="One-shot x402 setup: choose a wallet provider, provision the CDP server wallet, "
+         "and register the Bazaar MCP server. Skips the rest of the wizard.",
 )
 ```
 
@@ -37,11 +37,34 @@ def _run_x402_one_shot(config: dict) -> None:
     run_x402_onboarding(config)
 ```
 
+## What `run_x402_onboarding` does (all in the companion)
+
+1. **Provider selection** (interactive TTY): shows `1) Local CDP Tools` and
+   `2) Remote Coinbase MCP — Coming Soon!`. The remote option is visible but locked;
+   selecting it falls back to local. Non-interactive: defaults to `local`.
+
+2. **Credential check + wallet provisioning** (local provider): reads
+   `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET` from `~/.hermes/.env`.
+   If missing, prints specific instructions and exits cleanly (no crash). If present,
+   provisions (or reuses) a named CDP server wallet via the CDP SDK and prints the address.
+
+3. **MCP servers**: registers only `bazaar` (discovery + proxy) under `mcp_servers` in
+   local mode. The `coinbase` entry is removed if stale. In `coinbase_mcp` mode both
+   `coinbase` + `bazaar` are added.
+
+4. **Balance + funding hint**: reads on-chain USDC; if empty, prints `cdp_faucet`
+   (testnet) or `cdp_onramp` (mainnet) instructions.
+
+5. **Budgets**: writes `max_price_usdc` + `session_budget_usdc` defaults under `x402:`
+   if not already set.
+
+6. **Persist**: calls `save_config()` to write all changes to `~/.hermes/config.yaml`.
+
 ## Notes
 
-- No other core files change. The companion owns the Coinbase MCP connection, the payment
-  tools, and registers the Coinbase/Bazaar MCP servers under `mcp_servers`. (No
-  `provider: x402` registration — inference payment is out of scope for now.)
-- Signing is delegated to the Coinbase MCP (OAuth in prod; a local stdio fake in dev), so
-  no CDP keys are required in the agent. The companion reads the wallet address/balance via
-  the Coinbase MCP's existing `coinbase_status` / `coinbase_balance` tools.
+- No other core files change. The companion owns all wallet/payment logic and registers
+  the Bazaar MCP. (No `provider: x402` registration — inference payment is out of scope.)
+- Local mode requires CDP credentials (`CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`,
+  `CDP_WALLET_SECRET`). These go in `~/.hermes/.env`, never in `config.yaml`.
+- The `coinbase_mcp` provider (remote hosted signer) is Coming Soon; when it ships the
+  flag and this seam are unchanged — only the companion needs updating.

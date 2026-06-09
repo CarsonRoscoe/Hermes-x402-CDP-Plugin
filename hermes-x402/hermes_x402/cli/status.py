@@ -14,11 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 def _gather() -> dict:
-    from .. import config
-    from ..coinbase_mcp import wallet
+    from .. import config, wallet
 
-    out: dict = {"network": config.network()}
-    out["signer"] = config.coinbase_mcp_config().get("transport")
+    provider = config.wallet_provider()
+    out: dict = {"network": config.network(), "provider": provider}
+    out["signer"] = "local CDP wallet" if provider == "local" else "coinbase-mcp (coming soon)"
     try:
         out["address"] = wallet.address()
         out["usdc_balance"] = wallet.usdc_balance(config.network())
@@ -35,7 +35,8 @@ def status_summary(raw_args: str = "") -> str:
 def status_command(args) -> int:
     s = _gather()
     print("x402 status")
-    print(f"  signer:   Coinbase MCP ({s.get('signer', '?')})")
+    print(f"  provider: {s.get('provider', '?')}")
+    print(f"  signer:   {s.get('signer', '?')}")
     print(f"  wallet:   {s.get('address') or '(unavailable)'}")
     bal = s.get("usdc_balance")
     print(f"  balance:  {bal if bal is not None else '(unknown)'} USDC on {s.get('network')}")

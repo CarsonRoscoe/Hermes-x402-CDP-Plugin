@@ -22,11 +22,16 @@ metadata:
     category: blockchain
 ---
 
-# x402 Payments Skill
+# x402 Payments Skill (Remote Coinbase MCP)
 
-How to discover, fund, and pay for x402-enabled services. Payments are signed by a
-Coinbase MCP server. This skill covers the full flow from funding through calling a paid
-endpoint. Run `hermes x402 init` once before using paid tools.
+How to discover, fund, and pay for x402-enabled services. This deployment signs and manages
+the wallet via a **Coinbase MCP server** (tools prefixed `mcp_coinbase_*`). This skill covers
+the full flow from funding through calling a paid endpoint. Run `hermes x402 init` once before
+using paid tools.
+
+> Provider note: the same capabilities exist in the "Local CDP Tools" provider under `cdp_*`
+> tool names (e.g. `cdp_wallet_balance`, `cdp_faucet`, `cdp_onramp`). In this deployment the
+> wallet is the remote Coinbase MCP, so use the `mcp_coinbase_*` tools below.
 
 ## Available tools (use these — don't reinvent them)
 

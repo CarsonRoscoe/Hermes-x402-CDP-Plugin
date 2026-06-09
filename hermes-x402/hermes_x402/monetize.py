@@ -66,12 +66,12 @@ def paid_tool(
     from x402.schemas import ResourceConfig
 
     if pay_to is None:
-        from .coinbase_mcp import wallet
+        from . import wallet
 
         pay_to = wallet.address()
         if not pay_to:
             raise ValueError(
-                "pay_to not given and the Coinbase MCP did not report a wallet address"
+                "pay_to not given and the wallet provider did not report an address"
             )
 
     server = build_resource_server(network)

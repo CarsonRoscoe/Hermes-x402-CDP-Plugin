@@ -86,16 +86,23 @@ def _register_slash(ctx) -> None:
 
 
 def _register_skills(ctx) -> None:
-    """Register bundled, read-only plugin skills under the ``hermes-x402:`` namespace."""
+    """Register the bundled x402 skill variant matching the active wallet provider.
+
+    Two variants exist (``x402-payments-local`` referencing the native ``cdp_*`` tools, and
+    ``x402-payments-mcp`` referencing ``mcp_coinbase_*``). We register exactly one under the
+    stable bare name ``x402-payments`` so the agent always resolves ``hermes-x402:x402-payments``
+    to the content for the current provider. Switching providers takes effect on restart
+    (skills are registered once at startup, like MCP servers).
+    """
     from pathlib import Path
 
+    from . import config
+
     skills_dir = Path(__file__).parent / "skills"
-    if not skills_dir.is_dir():
-        return
-    for child in sorted(skills_dir.iterdir()):
-        skill_md = child / "SKILL.md"
-        if child.is_dir() and skill_md.exists():
-            ctx.register_skill(child.name, skill_md)
+    variant = "x402-payments-local" if config.is_local_provider() else "x402-payments-mcp"
+    skill_md = skills_dir / variant / "SKILL.md"
+    if skill_md.exists():
+        ctx.register_skill("x402-payments", skill_md)
 
 
 def _register_hooks(ctx) -> None:
