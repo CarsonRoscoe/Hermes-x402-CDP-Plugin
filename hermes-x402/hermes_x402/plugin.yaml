@@ -19,16 +19,17 @@ provides_tools:
 # Lifecycle hooks this plugin attaches.
 provides_hooks:
   - pre_tool_call
+  - transform_tool_result
   - on_session_end
+  - on_session_finalize
 
 # Additional surfaces registered in register(ctx) (documented here for discoverability;
 # the manifest schema only formally tracks tools + hooks):
-#   - CLI:   hermes x402 {init,wallet,fund,balance,status,spend,payments}
+#   - CLI:   hermes x402 {init,wallet,fund,balance,status,spend,payments,reconcile}
 #   - slash: /x402 (wallet + provider + balance summary)
-#   - skill: x402-payments (bundled; the variant matching x402.provider)
+#   - skill: x402-payments (bundled local-wallet guidance)
 
 # Wallet provider (x402.provider in config.yaml):
 #   - "local" (default): self-custodial CDP server wallet + native cdp_* tools. Requires
 #     CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET in ~/.hermes/.env.
-#   - "coinbase_mcp": remote hosted Coinbase MCP signer (Coming Soon).
 # The plugin loads fine without credentials; the cdp_* tools report a clear error until set.

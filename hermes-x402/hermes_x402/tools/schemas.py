@@ -13,7 +13,9 @@ X402_REQUEST = {
         "direct HTTP API whose URL you already know. Do NOT use it to call CDP Bazaar services — "
         "those are paid via mcp_bazaar_proxy_tool_call followed by x402_retry_mcp_payment, never "
         "by calling their URL directly. If payment is rejected due to insufficient balance, use "
-        "cdp_faucet (testnet) or cdp_onramp (mainnet) to fund the wallet first, then retry."
+            "cdp_faucet (testnet) or cdp_onramp (mainnet) to fund the wallet first, then retry. "
+            "If a call returns unknown_settlement, check cdp_payments or run `hermes x402 reconcile` "
+            "before retrying."
     ),
     "parameters": {
         "type": "object",
@@ -34,7 +36,9 @@ X402_REQUEST = {
                 "type": "string",
                 "description": (
                     "Optional stable key making this a one-time operation: a repeat call with "
-                    "the same key returns the prior paid result instead of paying again."
+                    "the same key returns the prior paid result instead of paying again "
+                    "(cached for up to 1 hour). Use for requests where paying twice would be "
+                    "harmful. Do not use for time-sensitive or frequently-refreshed data."
                 ),
             },
             "override": {
@@ -68,7 +72,8 @@ def build_retry_mcp_schema(bazaar_proxy_tool: str = "mcp_bazaar_proxy_tool_call"
             f"tool_name={bazaar_proxy_tool!r} with arguments={{toolName, parameters}} — do NOT "
             "pass the discovered x402_… resource name (it is not a registered tool and will fail "
             "with 'no mcp_servers entry matches tool'). Do not call this preemptively; only after the "
-            "same mcp_* tool returned payment-required in this session."
+            "same mcp_* tool returned payment-required in this session. If retry returns "
+            "unknown_settlement, inspect cdp_payments or `hermes x402 reconcile` before retrying."
         ),
         "parameters": {
             "type": "object",
@@ -105,7 +110,8 @@ def build_retry_mcp_schema(bazaar_proxy_tool: str = "mcp_bazaar_proxy_tool_call"
                     "type": "string",
                     "description": (
                         "Optional stable key making this a one-time operation: a repeat call with "
-                        "the same key returns the prior paid result instead of paying again."
+                        "the same key returns the prior paid result instead of paying again "
+                        "(cached for up to 1 hour). Do not use for time-sensitive data."
                     ),
                 },
                 "override": {
@@ -251,8 +257,11 @@ CDP_TRANSFER = {
     "description": (
         "Send USDC or ETH from the CDP server wallet to another address. This MOVES REAL "
         "FUNDS out of the wallet — use only when explicitly instructed. "
-        "NOTE: cdp_transfer is NOT subject to the x402 session budget (x402.session_budget_usdc); "
-        "it only checks the per-call cap (x402.max_price_usdc) unless 'override' is set. "
+        "USDC transfers are guarded by two limits: the per-call cap (x402.max_price_usdc) and "
+        "a cumulative per-session ceiling (x402.session_transfer_budget_usdc, defaults to "
+        "x402.session_budget_usdc). The per-call cap can be bypassed with override=true, but "
+        "the session ceiling cannot. "
+        "NOTE: ETH transfers have no per-session aggregate cap — only the per-call cap applies. "
         "Call cdp_wallet_balance first to confirm the wallet has sufficient funds."
     ),
     "parameters": {

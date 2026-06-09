@@ -1,7 +1,6 @@
 """`hermes x402 wallet | fund | balance` subcommands.
 
-Reads route through the provider-aware ``coinbase_mcp.wallet`` facade: the self-custodial
-local CDP wallet (default) or the hosted Coinbase MCP.
+Reads route through the local CDP wallet facade.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ def wallet_command(args) -> int:
 
 
 def fund_command(args) -> int:
-    """Print funding instructions appropriate to the network/provider."""
+    """Print funding instructions appropriate to the network."""
     addr = wallet.address()
     net = config.network()
     if not addr:
@@ -31,12 +30,10 @@ def fund_command(args) -> int:
     print("Fund your x402 wallet")
     print(f"  Address ({net}):")
     print(f"    {addr}")
-    if config.is_local_provider() and config.is_testnet(net):
+    if config.is_testnet(net):
         print("  Testnet: ask the agent to call cdp_faucet (or `hermes x402 balance` to verify).")
-    elif config.is_local_provider():
-        print("  Mainnet: ask the agent to call cdp_onramp to buy USDC with fiat, or send USDC here.")
     else:
-        print(f"  Send USDC on {net} to the address above.")
+        print("  Mainnet: ask the agent to call cdp_onramp to buy USDC with fiat, or send USDC here.")
     print("  Then check it arrived with: hermes x402 balance")
     return 0
 

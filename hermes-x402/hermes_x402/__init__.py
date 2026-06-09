@@ -11,13 +11,12 @@ surface this plugin exposes:
 - the ``hermes x402 ...`` CLI subcommand tree,
 - the ``/x402`` in-session slash command,
 - the bundled ``x402-payments`` skill,
-- a ``pre_tool_call`` budget gate + an ``on_session_end`` spend summary hook.
+- a ``pre_tool_call`` budget gate + session-end/finalize spend summary hooks.
 
-Discovery and paid-MCP calls happen natively: onboarding registers the Coinbase MCP
-(signing) and the CDP Bazaar MCP (``search_resources`` / ``proxy_tool_call``) under
-Hermes's ``mcp_servers``, so the agent calls them as ``mcp_*`` tools and pays reactively
-via ``x402_retry_mcp_payment``. Payments use the ``exact`` scheme; paying for *inference*
-is out of scope.
+Discovery and paid-MCP calls happen natively: onboarding registers the CDP Bazaar MCP
+(``search_resources`` / ``proxy_tool_call``) under Hermes's ``mcp_servers``, so the agent
+calls it as ``mcp_*`` tools and pays reactively via ``x402_retry_mcp_payment``. Payments
+use the ``exact`` scheme; paying for *inference* is out of scope.
 
 Everything here is intentionally defensive: each registration is wrapped so a stub
 or a missing optional dependency disables that one surface without breaking the host
@@ -86,21 +85,11 @@ def _register_slash(ctx) -> None:
 
 
 def _register_skills(ctx) -> None:
-    """Register the bundled x402 skill variant matching the active wallet provider.
-
-    Two variants exist (``x402-payments-local`` referencing the native ``cdp_*`` tools, and
-    ``x402-payments-mcp`` referencing ``mcp_coinbase_*``). We register exactly one under the
-    stable bare name ``x402-payments`` so the agent always resolves ``hermes-x402:x402-payments``
-    to the content for the current provider. Switching providers takes effect on restart
-    (skills are registered once at startup, like MCP servers).
-    """
+    """Register the bundled x402 skill (local CDP wallet flow)."""
     from pathlib import Path
 
-    from . import config
-
     skills_dir = Path(__file__).parent / "skills"
-    variant = "x402-payments-local" if config.is_local_provider() else "x402-payments-mcp"
-    skill_md = skills_dir / variant / "SKILL.md"
+    skill_md = skills_dir / "x402-payments-local" / "SKILL.md"
     if skill_md.exists():
         ctx.register_skill("x402-payments", skill_md)
 
@@ -108,10 +97,13 @@ def _register_skills(ctx) -> None:
 def _register_hooks(ctx) -> None:
     """Attach lifecycle hooks: budget gate before paid tools, spend summary at end."""
     from .budget import pre_tool_call
+    from .hooks import on_transform_tool_result
     from .ledger import on_session_end
 
     ctx.register_hook("pre_tool_call", pre_tool_call)
+    ctx.register_hook("transform_tool_result", on_transform_tool_result)
     ctx.register_hook("on_session_end", on_session_end)
+    ctx.register_hook("on_session_finalize", on_session_end)
 
 
 # Each surface is independent: a failure in one must not take down the others or

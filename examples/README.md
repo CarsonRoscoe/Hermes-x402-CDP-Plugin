@@ -8,7 +8,7 @@ a **self-custodial CDP server wallet** (CDP API keys in `~/.hermes/.env`).
 | `pay_for_http_service.py` | Pay an x402 HTTP endpoint via the plugin's `x402_request` |
 | `pay_for_mcp_tool.py` | Pay + retry a native `mcp_*` call via `x402_retry_mcp_payment` |
 | `monetize_endpoint.py` | Charge for your own MCP tool with `monetize.paid_tool` |
-| `onboarding_walkthrough.md` | What `hermes setup --coinbase` does end to end |
+| `onboarding_walkthrough.md` | What the `hermes setup --coinbase` upstream flow targets (same logic as `hermes x402 init`) |
 | `self_publish_walkthrough.md` | An agent monetizing its own endpoint |
 
 Discovery is **native**: onboarding registers the CDP Bazaar MCP under Hermes `mcp_servers`

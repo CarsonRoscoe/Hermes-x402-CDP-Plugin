@@ -2,10 +2,10 @@
 
 `x402HttpxClient` (HTTP) and `x402MCPClient` (MCP) both reach the wallet through a single
 method: ``create_payment_payload(payment_required) -> PaymentPayload`` (plus a no-op
-``handle_payment_response``). We implement exactly that, forwarding the full
-``PaymentRequired`` to the Coinbase MCP's ``create_payment_payload`` tool and validating
-the returned ``PaymentPayload``. The Coinbase MCP selects which ``PaymentRequirements`` to
-pay; the plugin does not pre-select.
+``handle_payment_response``). We implement exactly that, normalizing the full
+``PaymentRequired`` and validating the returned ``PaymentPayload``. The shipped provider
+signs locally via the CDP SDK; the remote Coinbase MCP branch is retained as future
+provider plumbing.
 
 Per-call budget (two gates):
 1. Before contacting the signer, refuse if *every* accepted requirement exceeds the cap
@@ -121,7 +121,7 @@ def selected_usdc(payload: Any, payment_required: Any = None) -> float | None:
 
 
 class CoinbaseMcpPaymentClient:
-    """Duck-typed x402 payment client backed by the Coinbase MCP signer.
+    """Duck-typed x402 payment client backed by the active signer backend.
 
     Drop-in for both ``x402HttpxClient(client)`` and ``x402MCPClient(adapter, client)``.
     """
@@ -139,6 +139,8 @@ class CoinbaseMcpPaymentClient:
         self._cap = max_price_usdc or 0.0
         #: price of the last requirement set seen, for ledger/reporting.
         self.last_min_usdc: float | None = None
+        #: true only when a payment payload was successfully created/validated.
+        self.last_payload_signed: bool = False
 
     @property
     def _conn(self) -> CoinbaseMcpConnection:
@@ -151,8 +153,10 @@ class CoinbaseMcpPaymentClient:
 
         Budget is checked first (no x402 import needed) so an over-cap call is refused
         before we ever contact the signer. Signing is delegated to the provider backend:
-        the local CDP signer (in-process) or the Coinbase MCP (remote).
+        the local CDP signer today, or the Coinbase MCP remote signer when that provider
+        ships.
         """
+        self.last_payload_signed = False
         self.last_min_usdc = min_usdc_in_accepts(payment_required)
         if self._cap > 0 and self.last_min_usdc is not None and self.last_min_usdc > self._cap:
             raise PaymentExceedsCapError(self.last_min_usdc, self._cap)
@@ -172,6 +176,9 @@ class CoinbaseMcpPaymentClient:
 
             payload_dict = await cdp_signer.create_payment_payload_async(pr_dict)
         else:
+            # FUTURE WORK: remote Coinbase MCP provider (coinbase_mcp/connection.py).
+            # Unreachable today — WALLET_PROVIDERS = ("local",) ensures is_local_provider()
+            # is always True. This branch is retained for the future remote-signer transition.
             result = await self._conn.call_tool(
                 "create_payment_payload", {"payment_required": pr_dict}
             )
@@ -199,6 +206,7 @@ class CoinbaseMcpPaymentClient:
                     "signer did not expose the selected payment amount; refusing under "
                     "strict failure_mode (set x402.failure_mode: best-effort to allow)"
                 )
+        self.last_payload_signed = True
         return payload
 
     async def handle_payment_response(self, ctx: Any) -> None:
@@ -207,8 +215,7 @@ class CoinbaseMcpPaymentClient:
 
     def get_extensions(self) -> list:
         """The x402 HTTP client calls this to collect registered extensions.
-        We register none — signing is delegated to the Coinbase MCP which handles
-        selection transparently. Returns empty list so extension-bearing endpoints
-        (e.g. permit2 gas-sponsoring) still fall through to the base payment flow.
+        We register none. Returns empty list so extension-bearing endpoints (e.g. permit2
+        gas-sponsoring) still fall through to the base payment flow.
         """
         return []

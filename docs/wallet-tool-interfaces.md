@@ -3,10 +3,12 @@
 This document catalogs the wallet/payment tool surfaces relevant to the Hermes x402
 integration, and proposes the interface we want a wallet provider to converge on.
 
-There are three implementations that exist today, plus one proposed interface:
+There are two implementations available today, one historical reference, plus one proposed
+interface:
 
 1. **Coinbase MCP** — the internal hosted brokerage MCP (`c3/coinbase-mcp`).
-2. **Fake Coinbase MCP** — our local dev stand-in for the future remote signer.
+2. **Reference Coinbase-MCP-shaped interface** — a historical dev stand-in shape for the
+   future remote signer (not shipped as a runnable server in this repo).
 3. **Local CDP server-wallet tools** — the `cdp_*` tools the plugin ships today (default provider).
 4. **x402 Hermes Wallet Interface** — *our ask*: the canonical tool set an x402-paying Hermes
    agent actually needs, which both the local and remote providers should implement.
@@ -57,11 +59,11 @@ Auth: OAuth/CAT (user-level). Transport: remote HTTP `/mcp` (JSON-RPC 2.0).
 
 ---
 
-## 2. Fake Coinbase MCP (dev stand-in)
+## 2. Coinbase-MCP-shaped reference interface (historical dev stand-in)
 
-A minimal stdio MCP that implements only what x402 needs, so we can develop end-to-end
-before the real remote signer exists. Now a thin wrapper over the shared `hermes_x402.cdp`
-core; retained as the dev stand-in for the `coinbase_mcp` provider.
+The minimal stdio MCP shape used during early development to emulate a remote signer before
+it exists. This section documents the interface shape for compatibility planning; it is not
+a shipped runtime server in this repository.
 
 | Tool | Inputs | Outputs | Usage |
 |---|---|---|---|
@@ -86,7 +88,7 @@ in-process and sign x402 payments locally. Registered only when `x402.provider =
 | `cdp_wallet_balance` | network? | eth, usdc, network, address | Check funds before paying/transferring |
 | `cdp_faucet` | token (usdc/eth), network? (testnet) | tx_hash, token, network, address, explorer | Fund on testnet (no captcha) |
 | `cdp_onramp` | purchase_currency?, network?, amount?, payment_currency?, country?, subdivision? | onramp_url, destination_address, network, purchase_currency | Buy crypto with fiat (mainnet funding) |
-| `cdp_transfer` | to, amount, token?, network?, override? | tx_hash, to, amount, token, network, explorer | Send USDC/ETH out (guarded by per-call cap) |
+| `cdp_transfer` | to, amount, token?, network?, override? | tx_hash, to, amount, token, network, explorer | Send USDC/ETH out (USDC guarded by per-call cap; not counted against x402 session budget) |
 
 x402 signing is delegated internally (`hermes_x402.cdp.signer.create_payment_payload`) by the
 payment client — it is not a separate agent tool in local mode.

@@ -7,8 +7,8 @@ Handlers take ``(args: dict, **kwargs)`` and must return a JSON string.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 from .. import config
 from . import schemas
@@ -42,11 +42,11 @@ class ToolSpec:
     handler: Callable[..., str]
     emoji: str = "🪙"
     # Optional availability gate (return False to hide the tool from the model).
-    check_fn: Optional[Callable[[], bool]] = None
+    check_fn: Callable[[], bool] | None = None
 
 
 TOOLS: tuple[ToolSpec, ...] = (
-    # Always present (both providers).
+    # Always present.
     ToolSpec("x402_request", schemas.X402_REQUEST, x402_request, emoji="🪙"),
     ToolSpec("x402_retry_mcp_payment", _retry_mcp_schema(), x402_retry_mcp_payment, emoji="🔁"),
     # Local CDP wallet tools — visible only when provider == "local" (check_fn gate).

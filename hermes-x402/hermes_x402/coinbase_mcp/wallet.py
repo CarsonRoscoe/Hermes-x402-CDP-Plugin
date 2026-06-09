@@ -1,9 +1,11 @@
-"""Coinbase MCP wallet reads (address + USDC balance).
+"""FUTURE WORK — NOT ACTIVE IN THE CURRENT RELEASE.
 
-Used only by the ``coinbase_mcp`` provider; the provider-neutral entry point is
-:mod:`hermes_x402.wallet`. Reuses the hosted Coinbase MCP's existing tools
-(``coinbase_status`` / ``coinbase_balance``) and degrades gracefully (returns ``None``)
-when a read isn't available, so the payment path never depends on them.
+Wallet reads (address + USDC balance) for the remote Coinbase MCP provider. This module
+is unreachable in the current release because ``WALLET_PROVIDERS = ("local",)`` forces
+``normalize_provider()`` to always return ``"local"``.
+
+The provider-neutral entry point is :mod:`hermes_x402.wallet`, which dispatches only to
+the local CDP provider today.
 """
 
 from __future__ import annotations

@@ -47,8 +47,8 @@ def paid_tool(
 ):
     """Return a decorator that charges ``price_usdc`` to call a FastMCP tool.
 
-    ``pay_to`` defaults to the wallet address reported by the Coinbase MCP, so an agent can
-    monetize a tool with payouts to its own wallet without hardcoding an address.
+    ``pay_to`` defaults to the local wallet address, so an agent can monetize a tool with
+    payouts to its own wallet without hardcoding an address.
 
     Usage::
 

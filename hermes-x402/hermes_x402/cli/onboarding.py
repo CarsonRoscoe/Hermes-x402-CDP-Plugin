@@ -2,7 +2,7 @@
 
 Thin CLI wrapper over ``..setup_flow.run_x402_onboarding`` (the same entry point the
 upstream ``hermes setup --coinbase`` flag calls). Connects the signer and registers the
-Coinbase + Bazaar MCP servers in ``mcp_servers``.
+Bazaar MCP server in ``mcp_servers`` (and removes stale ``coinbase`` signer entries).
 """
 
 from __future__ import annotations

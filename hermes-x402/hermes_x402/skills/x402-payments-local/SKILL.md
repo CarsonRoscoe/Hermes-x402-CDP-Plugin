@@ -11,8 +11,8 @@ license: Apache-2.0
 platforms: [linux, macos]
 triggers:
   - user asks to call, discover, or pay for a CDP Bazaar service
-  - user mentions mcp_bazaar_search_resources or mcp_bazaar_proxy_tool_call
-  - mcp_bazaar_proxy_tool_call returns a 402 / payment-required result
+  - user mentions mcp_*_search_resources or mcp_*_proxy_tool_call for Bazaar
+  - a Bazaar proxy mcp_*_proxy_tool_call returns a 402 / payment-required result
   - any mcp_* tool returns payment-required and needs x402_retry_mcp_payment
   - user asks to call a paid HTTP API or use x402_request
   - x402_request fails with payment_rejected_402 or payment_signing_failed
@@ -28,10 +28,6 @@ metadata:
 How to discover, fund, and pay for x402-enabled services. This deployment uses a
 **self-custodial CDP server wallet** managed in-process via native `cdp_*` tools (CDP
 credentials in `~/.hermes/.env`). Run `hermes x402 init` once before using paid tools.
-
-> Provider note: the same capabilities exist in the "Remote Coinbase MCP" provider under
-> `mcp_coinbase_*` tool names (e.g. `mcp_coinbase_coinbase_balance`). In this deployment the
-> wallet is local, so use the `cdp_*` tools below.
 
 ## Available tools (use these — don't reinvent them)
 
@@ -62,9 +58,10 @@ wallet under the hood — you never call a signing tool directly.
 - **Mainnet** (base): use `cdp_onramp` to get a Coinbase Onramp URL the user opens to buy
   with fiat, or have funds sent to the address from `cdp_wallet_status`.
 
-### Native Bazaar MCP tools (`mcp_bazaar_*`)
-- `mcp_bazaar_search_resources` — discover paid services by keyword.
-- `mcp_bazaar_proxy_tool_call` — invoke a discovered Bazaar service.
+### Native Bazaar MCP tools (`mcp_*`)
+Use the configured Bazaar server name from `mcp_servers`:
+- `mcp_<bazaar_server>_search_resources` — discover paid services by keyword.
+- `mcp_<bazaar_server>_proxy_tool_call` — invoke a discovered Bazaar service.
 
 ## Typical flows
 
@@ -77,14 +74,14 @@ If rejected with `payment_rejected_402` and `insufficient_funds`:
 2. Retry `x402_request`.
 
 ### Discover and pay a Bazaar service (the ONLY correct flow)
-1. `mcp_bazaar_search_resources(query="jokes")` -> pick a service; note its `toolName`
+1. `mcp_<bazaar_server>_search_resources(query="jokes")` -> pick a service; note its `toolName`
    (it looks like `x402_get_...`).
-2. `mcp_bazaar_proxy_tool_call(toolName="x402_get_...", parameters={...})` -> returns
+2. `mcp_<bazaar_server>_proxy_tool_call(toolName="x402_get_...", parameters={...})` -> returns
    payment-required (402).
 3. Pay by retrying the **proxy** tool:
 ```
 x402_retry_mcp_payment(
-    tool_name="mcp_bazaar_proxy_tool_call",          # the proxy tool — NOT the x402_get_... name
+    tool_name="mcp_<bazaar_server>_proxy_tool_call",  # the proxy tool — NOT the x402_get_... name
     arguments={"toolName": "x402_get_...", "parameters": {...}}   # identical to step 2
 )
 ```
@@ -102,9 +99,13 @@ cdp_wallet_balance(network="base-sepolia")
 ```
 cdp_transfer(to="0x...", amount=1.5, token="usdc")
 ```
-Only when explicitly instructed. USDC transfers above `x402.max_price_usdc` are refused
-unless `override=true`. **Important:** `cdp_transfer` is NOT covered by the session budget
-(`x402.session_budget_usdc`) — it is a direct wallet operation, not an x402 payment.
+Only when explicitly instructed. USDC transfers are subject to two guards:
+- Per-call cap (`x402.max_price_usdc`): refused unless `override=true`.
+- Per-session ceiling (`x402.session_transfer_budget_usdc`, defaults to `x402.session_budget_usdc`):
+  cumulative USDC sent via `cdp_transfer` this session cannot exceed this value, even with `override=true`.
+
+**Important:** `cdp_transfer` is separate from the x402 payment budget (`x402.session_budget_usdc`).
+ETH transfers have only a per-call cap; no per-session aggregate limit applies to ETH.
 Use `cdp_wallet_balance` to confirm funds before transferring.
 
 ### Reconcile spend (receipts)
@@ -138,7 +139,7 @@ A service using `assetTransferMethod == "permit2"` is skipped at signing time.
 ## Pitfalls
 - `cdp_faucet` is testnet only; it errors on mainnet. Use `cdp_onramp` for mainnet funding.
 - After funding, allow ~15 seconds for the transaction to confirm before retrying.
-- Retry the tool you called, not the resource it proxies (Bazaar = `mcp_bazaar_proxy_tool_call`).
+- Retry the tool you called, not the resource it proxies (Bazaar = `mcp_<bazaar_server>_proxy_tool_call`).
 - Never call `x402_retry_mcp_payment` preemptively — only after a real payment-required result.
 - `cdp_transfer` moves real funds; confirm the recipient and amount.
 
@@ -150,8 +151,8 @@ was rendered. Use `cdp_payments` (or `cdp_wallet_balance`) to review spend and w
 
 ## Recovery from unknown_settlement errors
 If a paid call returns `error: "unknown_settlement"`, money may or may not have moved. Do
-not assume failure. Check `cdp_payments` to see if the transaction appears. If you need to
-retry, pass `override=true`:
+not assume failure. Check `cdp_payments` (or `hermes x402 reconcile`) to inspect pending
+journal entries. If you need to retry, pass `override=true`:
 ```
 x402_request(url="https://...", override=true)
 ```

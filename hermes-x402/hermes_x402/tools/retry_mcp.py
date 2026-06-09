@@ -4,8 +4,8 @@ The reactive model: the agent calls any native ``mcp_*`` tool (e.g. a paid Bazaa
 ``proxy_tool_call`` or any connected paid MCP server). If it returns payment-required, the
 agent calls this tool with the SAME ``tool_name`` and ``arguments``. We resolve the
 upstream server URL from Hermes's ``mcp_servers`` config, recover the real upstream tool
-name, then re-issue the call through the x402 SDK's ``x402MCPClient`` using the Coinbase
-MCP signer (payment injected into ``_meta``).
+name, then re-issue the call through the x402 SDK's ``x402MCPClient`` using the shared
+payment client (local CDP signer today; payment injected into ``_meta``).
 
 URL-based MCP servers only (stdio upstreams would need spawning a second instance; deferred).
 """
@@ -17,9 +17,16 @@ import logging
 import re
 
 from .. import config
-from .._async import run_async
+from .._async import UnknownSettlementError, run_async
 from ..coinbase_mcp.payment_client import min_usdc_in_accepts
-from ._paid import StructuredToolError, effective_cap, extract_server_error, record_paid_call, run_journaled
+from ..session import current_session_id
+from ._paid import (
+    StructuredToolError,
+    effective_cap,
+    extract_server_error,
+    record_paid_call,
+    run_journaled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,17 +173,35 @@ async def _do_retry(server_url, headers, sanitized_suffix, arguments, cap, payme
             )
 
         x402_mcp = x402MCPClient(McpSessionAdapter(session), payment_client, auto_payment=True)
-        if payment_required and config.trust_supplied_payment_required():
-            # Opt-in fast path: trust the agent-supplied requirement and pay directly. Off by
-            # default because a forged requirement could redirect a payment (R6).
-            payload = await payment_client.create_payment_payload(payment_required)
-            result = await with_timeout(x402_mcp.call_tool_with_payment(real, arguments or {}, payload))
-            price = min_usdc_in_accepts(payment_required)
-        else:
-            # Default: re-probe the upstream in-process (probe -> 402 -> sign -> retry), so the
-            # requirement we pay always comes from the real server, not the caller.
-            result = await with_timeout(x402_mcp.call_tool(real, arguments or {}))
-            price = payment_client.last_min_usdc
+        try:
+            if payment_required and config.trust_supplied_payment_required():
+                # Opt-in fast path: trust the agent-supplied requirement and pay directly. Off by
+                # default because a forged requirement could redirect a payment (R6).
+                payload = await payment_client.create_payment_payload(payment_required)
+                result = await with_timeout(x402_mcp.call_tool_with_payment(real, arguments or {}, payload))
+                price = min_usdc_in_accepts(payment_required)
+            else:
+                # Default: re-probe the upstream in-process (probe -> 402 -> sign -> retry), so the
+                # requirement we pay always comes from the real server, not the caller.
+                result = await with_timeout(x402_mcp.call_tool(real, arguments or {}))
+                price = payment_client.last_min_usdc
+        except Exception as exc:
+            inner_msg = str(exc)
+            if "NoMatchingRequirements" in type(exc).__name__ or "NoMatchingRequirements" in inner_msg:
+                raise StructuredToolError({
+                    "error": "incompatible_scheme",
+                    "detail": (
+                        "No compatible payment requirement found. This MCP tool may only accept "
+                        "Permit2, which is not supported by this wallet (EIP-3009 only). "
+                        "Check the service's accepts[] list."
+                    ),
+                    "hint": (
+                        "This wallet signs EIP-3009 (exact scheme) only. Choose a service whose "
+                        "accepts[] includes an EIP-3009-compatible requirement "
+                        "(assetTransferMethod absent or 'erc3009')."
+                    ),
+                }) from exc
+            raise
         return result, price
 
 
@@ -211,7 +236,7 @@ def x402_retry_mcp_payment(args: dict, **kwargs) -> str:
             }
         )
     headers = scfg.get("headers") if isinstance(scfg.get("headers"), dict) else None
-    session_id = kwargs.get("task_id")
+    session_id = current_session_id(kwargs)
 
     def run():
         result, price = run_async(
@@ -247,37 +272,17 @@ def x402_retry_mcp_payment(args: dict, **kwargs) -> str:
                     server_error = server_error or "upstream returned another 402 (payment rejected by server/facilitator)"
 
             if payment_attempted and not payment_settled:
-                # Extract upstream URL from the 402 content (handy for a direct-URL diagnostic).
-                upstream_url = None
-                if isinstance(content_parsed, dict):
-                    resource = content_parsed.get("resource") or {}
-                    upstream_url = (
-                        resource.get("url") if isinstance(resource, dict) else None
-                    )
-
-                hint = (
-                    "The server/facilitator rejected the signed payment before settlement, so no "
-                    "funds were deducted. Check server_error and raw_content for the upstream reason "
-                    "(common causes: insufficient wallet balance, expired/again-used authorization, "
-                    "or an asset/network mismatch)."
-                    + (f" Upstream URL: {upstream_url}." if upstream_url else "")
+                # Payment was signed and submitted but the upstream server returned is_error=True
+                # without a settlement receipt. The facilitator may have rejected the payment (no
+                # funds moved) OR settled and the receipt was lost before the server errored —
+                # we cannot confirm on-chain status from here. Surface as unknown_settlement so
+                # the caller treats it the same way as a timeout mid-flight (R1: fail closed).
+                raise UnknownSettlementError(
+                    "payment payload was submitted but the upstream server returned an error and "
+                    "did not include a settlement receipt; check cdp_payments or run "
+                    "`hermes x402 reconcile` before retrying. "
+                    + (f"Server error: {server_error}." if server_error else "")
                 )
-
-                raise StructuredToolError({
-                    "error": "payment_attempted_but_rejected",
-                    "detail": (
-                        "Payment was signed and submitted but the upstream server returned an error. "
-                        "Settlement was not confirmed — no funds were deducted from your balance."
-                    ),
-                    "server_error": server_error,
-                    "raw_content": content[:3],
-                    "payment_attempted": True,
-                    "payment_settled": False,
-                    "price_usdc": price,
-                    "tool_name": tool_name,
-                    "upstream_url": upstream_url,
-                    "hint": hint,
-                })
             else:
                 raise StructuredToolError({
                     "error": "mcp_tool_error",
@@ -289,11 +294,19 @@ def x402_retry_mcp_payment(args: dict, **kwargs) -> str:
                     "tool_name": tool_name,
                 })
 
+        # A "successful" MCP result without settlement confirmation is unsafe to treat as
+        # complete when a payment was attempted: money may have moved but no receipt arrived.
+        if payment_attempted and not payment_settled:
+            raise UnknownSettlementError(
+                "payment payload was submitted but settlement was not confirmed by the upstream "
+                "server/facilitator; check cdp_payments or run `hermes x402 reconcile` before retrying"
+            )
+
         # Success path: only record to ledger when settlement is actually confirmed.
         if payment_settled:
             record_paid_call(
                 kind="mcp", amount_usdc=price or 0.0, endpoint=server_name, transaction=tx,
-                task_id=session_id,
+                session_id=session_id,
             )
 
         out = {

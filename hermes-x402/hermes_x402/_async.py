@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Coroutine
 from concurrent.futures import TimeoutError as _FuturesTimeout
-from typing import Any, Coroutine, TypeVar
+from typing import Any, TypeVar
 
 _T = TypeVar("_T")
 
@@ -47,12 +48,16 @@ def _ensure_loop() -> asyncio.AbstractEventLoop:
         return loop
 
 
-def run_async(coro: Coroutine[Any, Any, _T], *, timeout: float | None = 120.0) -> _T:
+def run_async(coro: Coroutine[Any, Any, _T], *, timeout: float | None = None) -> _T:
     """Run ``coro`` on the shared background loop and block for its result.
 
     Safe to call from any (sync) thread. Use for one-shot async operations such as CDP
     account provisioning, a paid HTTP request, or a paid MCP tool call.
     """
+    if timeout is None:
+        from . import config
+
+        timeout = config.timeout_seconds()
     loop = _ensure_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     try:

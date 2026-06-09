@@ -3,7 +3,7 @@
 ``Wallet`` provisions (or reuses) a named CDP server wallet via the CDP SDK and exposes
 async operations for wallet management (balance, faucet, transfer, onramp URL) plus a
 cached signer for x402 EIP-3009 signing. All CDP/x402 imports are lazy so this module is
-safe to import even when those SDKs aren't installed or the provider is ``coinbase_mcp``.
+safe to import in standalone tooling before credentials are available.
 
 Credentials (from the environment or ``~/.hermes/.env``):
   CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET
@@ -49,7 +49,15 @@ class Wallet:
         self._account_name: str | None = None
         self._signer: Any = None  # x402 EthAccountSigner over a CDP EvmLocalAccount
         self._account: Any = None  # cached CDP EvmLocalAccount (reused for transfers)
-        self._lock = asyncio.Lock()
+        self._lock: asyncio.Lock | None = None
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
+
+    def _ensure_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        return self._lock
 
     def _check_credentials(self) -> None:
         missing = config.missing_cdp_credentials()
@@ -65,7 +73,7 @@ class Wallet:
         """Provision (once) the CDP account and build the cached x402 signer."""
         if self._signer is not None:
             return
-        async with self._lock:
+        async with self._ensure_lock():
             if self._signer is not None:
                 return
             self._check_credentials()
@@ -179,8 +187,17 @@ class Wallet:
         if atomic <= 0:
             raise ValueError("transfer amount must be greater than zero")
 
-        # Use the account cached during ensure() to avoid a redundant CDP API round-trip.
-        tx_hash = await self._account.transfer(to=to, amount=atomic, token=token, network=network)
+        # Re-open CdpClient for the transfer rather than reusing self._account outside its
+        # original context manager. The CDP SDK docs do not guarantee that EvmLocalAccount
+        # remains valid after the CdpClient async context closes, so we use a fresh client
+        # (same pattern as balances/faucet). The account name is stable — ensure() already
+        # provisioned it under config.cdp_account_name().
+        from cdp import CdpClient
+
+        name = self._account_name or config.cdp_account_name()
+        async with CdpClient() as cdp:
+            acct = await cdp.evm.get_or_create_account(name=name)
+            tx_hash = await acct.transfer(to=to, amount=atomic, token=token, network=network)
         tx_hash = str(tx_hash)
         return {
             "tx_hash": tx_hash,

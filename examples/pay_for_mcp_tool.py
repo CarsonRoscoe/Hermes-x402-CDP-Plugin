@@ -1,7 +1,8 @@
 """Pay + retry a native MCP tool call that returned payment-required.
 
 In Hermes, the agent first calls a native ``mcp_*`` tool (e.g. the Bazaar's
-``mcp_bazaar_proxy_tool_call`` or any paid MCP server registered in ``mcp_servers``). If
+``mcp_<bazaar_server>_proxy_tool_call`` or any paid MCP server registered in
+``mcp_servers``). If
 that call comes back payment-required, the agent calls ``x402_retry_mcp_payment`` with the
 SAME tool name and arguments — the plugin resolves the server URL from ``mcp_servers``,
 signs via the self-custodial CDP server wallet, and re-issues the call with the payment
@@ -20,6 +21,15 @@ import json
 import sys
 
 
+def _default_tool_name() -> str:
+    try:
+        from hermes_x402.tools.retry_mcp import _find_bazaar_proxy_tool, _load_mcp_servers
+
+        return _find_bazaar_proxy_tool(_load_mcp_servers()) or "mcp_bazaar_proxy_tool_call"
+    except Exception:
+        return "mcp_bazaar_proxy_tool_call"
+
+
 def main(tool_name: str) -> None:
     from hermes_x402.tools.retry_mcp import x402_retry_mcp_payment
 
@@ -30,7 +40,7 @@ def main(tool_name: str) -> None:
 
 
 if __name__ == "__main__":
-    name = sys.argv[1] if len(sys.argv) > 1 else "mcp_bazaar_proxy_tool_call"
+    name = sys.argv[1] if len(sys.argv) > 1 else _default_tool_name()
     try:
         main(name)
     except Exception as exc:  # surface config/connection issues clearly in the example

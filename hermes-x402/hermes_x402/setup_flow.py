@@ -6,45 +6,24 @@ calls from its ``hermes setup --coinbase`` flag (mirroring how ``--portal`` call
 a thin flag + delegation.
 
 Flow:
-1. Connect to the Coinbase MCP signer (dev: local fake over stdio; prod: remote + OAuth)
-   and read the wallet address.
-2. Register the Coinbase + Bazaar MCP servers in ``mcp_servers`` so the agent can call them
-   natively (search/discovery via Bazaar; signing reads via Coinbase).
+1. Provision/read the local CDP server wallet and read the wallet address.
+2. Register the Bazaar MCP server in ``mcp_servers`` so the agent can call discovery/proxy
+   tools natively.
 3. Show USDC balance / funding hint.
 4. Persist budgets (per-call + per-session caps) under ``x402:``.
 
-Written to be non-interactive-safe so it can run from the setup wizard. The OAuth handshake
-for the remote Coinbase MCP is performed by the host (or a future flag); here we only verify
-the connection works by reading the wallet address.
+Written to be non-interactive-safe so it can run from the setup wizard.
 """
 
 from __future__ import annotations
 
 import logging
-import sys
 
 logger = logging.getLogger(__name__)
 
 
 def _select_provider(current: str) -> str:
-    """Interactively pick the wallet provider. Remote Coinbase MCP is Coming Soon.
-
-    Returns the chosen provider. Non-interactive (no TTY): keeps ``current`` (default
-    ``local``). Only ``local`` is selectable today; choosing remote prints a notice and
-    keeps the local provider.
-    """
-    if not (sys.stdin and sys.stdin.isatty()):
-        return current if current in ("local", "coinbase_mcp") else "local"
-
-    print("\nx402 wallet provider:")
-    print("  1) Local CDP Tools      — self-custodial CDP server wallet (recommended)")
-    print("  2) Remote Coinbase MCP  — Coming Soon!  (not yet available)")
-    try:
-        choice = input("Select [1]: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        choice = ""
-    if choice == "2":
-        print("Remote Coinbase MCP is Coming Soon — using Local CDP Tools for now.")
+    """Return the only supported provider (``local``)."""
     return "local"
 
 
@@ -110,7 +89,7 @@ def run_x402_onboarding(config_dict: dict | None = None) -> dict:
             print("CDP wallet not reachable — check CDP credentials in ~/.hermes/.env.")
     summary["steps"].append("signer")
 
-    # 2. Reconcile MCP servers to the provider (bazaar always; coinbase only for remote).
+    # 2. Reconcile MCP servers for the local provider (Bazaar always; stale coinbase removed).
     names = mcp_servers.ensure_mcp_servers(config_dict)
     summary["mcp_servers"] = names
     summary["steps"].append("mcp_servers")
@@ -143,8 +122,26 @@ def run_x402_onboarding(config_dict: dict | None = None) -> dict:
         "session_budget_usdc": cfg.session_budget_usdc(),
     }
 
+    # 5. Auto-enable the plugin so Hermes loads it without a manual config edit.
+    plugins = config_dict.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        plugins = {}
+        config_dict["plugins"] = plugins
+    enabled = plugins.setdefault("enabled", [])
+    if not isinstance(enabled, list):
+        enabled = []
+        plugins["enabled"] = enabled
+    if "hermes-x402" not in enabled:
+        enabled.append("hermes-x402")
+        summary["plugin_enabled"] = True
+        print("Plugin 'hermes-x402' added to plugins.enabled in config.")
+    else:
+        summary["plugin_enabled"] = False
+    summary["steps"].append("plugins")
+
     if _save_config(config_dict):
         summary["steps"].append("saved")
 
     print("Done. Try: hermes x402 status   |   hermes (chat and let it pay for tools)")
+    print("If mcp_servers changed, restart Hermes so tool descriptions reflect the new names.")
     return summary

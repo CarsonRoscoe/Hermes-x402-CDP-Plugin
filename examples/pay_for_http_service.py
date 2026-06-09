@@ -16,7 +16,7 @@ import sys
 def main(url: str) -> None:
     from hermes_x402.tools.request import x402_request
 
-    # max_price_usdc caps the spend; the Coinbase MCP picks which requirement to pay.
+    # max_price_usdc caps the spend; the local CDP signer picks which requirement to pay.
     print(x402_request({"url": url, "method": "GET", "max_price_usdc": 0.10}))
 
 

@@ -80,9 +80,10 @@ def cdp_onramp(args: dict, **kwargs) -> str:
 
 
 def cdp_transfer(args: dict, **kwargs) -> str:
-    """Handler for ``cdp_transfer`` — moves real funds; guarded by the per-call cap."""
-    from .. import config
+    """Handler for ``cdp_transfer`` — moves real funds; guarded by per-call and per-session caps."""
+    from .. import config, ledger
     from ..cdp import wallet_ops
+    from ..session import current_session_id
 
     args = args or {}
     to = args.get("to")
@@ -96,22 +97,61 @@ def cdp_transfer(args: dict, **kwargs) -> str:
     if amount is None:
         return _err("'amount' is required")
 
-    # Guard: USDC transfers are capped by the per-call cap unless explicitly overridden.
+    try:
+        amount_float = float(amount)
+    except (TypeError, ValueError):
+        return _err(f"invalid amount {amount!r}")
+
+    # Guard 1: USDC per-call cap (override=true bypasses this).
     cap = config.max_price_usdc()
     if token == "usdc" and not override and cap > 0:
-        try:
-            if float(amount) > cap:
-                return _err(
-                    f"transfer of {amount} USDC exceeds the per-call cap of {cap} USDC; "
-                    "raise x402.max_price_usdc or pass override=true",
-                    amount=amount,
-                    cap_usdc=cap,
-                )
-        except (TypeError, ValueError):
-            return _err(f"invalid amount {amount!r}")
+        if amount_float > cap:
+            return _err(
+                f"transfer of {amount} USDC exceeds the per-call cap of {cap} USDC; "
+                "raise x402.max_price_usdc or pass override=true",
+                amount=amount,
+                cap_usdc=cap,
+            )
+
+    # Guard 2: per-session cumulative transfer ceiling (applies even with override=true).
+    # This prevents unbounded fund drainage across multiple calls in one session.
+    session_id = current_session_id(kwargs)
+    if token == "usdc":
+        transfer_budget = config.session_transfer_budget_usdc()
+        if transfer_budget > 0 and session_id:
+            try:
+                already_transferred = ledger.session_transfer_total(session_id)
+                if already_transferred + amount_float > transfer_budget:
+                    return _err(
+                        f"cumulative transfer of {already_transferred + amount_float:.4f} USDC "
+                        f"would exceed the per-session transfer budget of {transfer_budget:.4f} USDC "
+                        f"(already transferred {already_transferred:.4f} USDC this session); "
+                        "raise x402.session_transfer_budget_usdc in config to continue.",
+                        amount=amount,
+                        already_transferred_usdc=already_transferred,
+                        session_transfer_budget_usdc=transfer_budget,
+                    )
+            except Exception as exc:
+                logger.warning("hermes-x402: session transfer budget check failed: %s", exc)
+                if config.is_strict():
+                    return _err(
+                        "session transfer budget could not be verified and failure_mode is strict; "
+                        "refusing the transfer.",
+                    )
 
     try:
-        return json.dumps(wallet_ops.transfer(to, amount, token, network))
+        result = wallet_ops.transfer(to, amount, token, network)
+        # Record the transfer so the session ceiling accounts for it.
+        if token == "usdc" and session_id:
+            ledger.record_payment(
+                kind="transfer",
+                amount_usdc=amount_float,
+                network=network,
+                endpoint=to,
+                transaction=result.get("tx_hash"),
+                session_id=session_id,
+            )
+        return json.dumps(result)
     except Exception as exc:  # noqa: BLE001
         return _err(f"{type(exc).__name__}: {exc}", to=to, amount=amount, token=token, network=network)
 
@@ -151,4 +191,19 @@ def cdp_payments(args: dict, **kwargs) -> str:
         for r in rows
     ]
     total = round(sum(p["amount_usdc"] for p in payments), 6)
-    return json.dumps({"payments": payments, "count": len(payments), "total_usdc": total})
+
+    # Surface any open/unresolved journal entries so the caller knows about in-flight
+    # or lost payments not yet in the settled ledger.
+    pending_count = len(ledger.journal_open_entries(limit=100))
+    result: dict = {
+        "payments": payments,
+        "count": len(payments),
+        "total_usdc": total,
+        "pending_journal_entries": pending_count,
+    }
+    if pending_count:
+        result["pending_note"] = (
+            f"{pending_count} payment(s) are in an unresolved state (pending/unknown). "
+            "Run `hermes x402 reconcile` to inspect and resolve them."
+        )
+    return json.dumps(result)

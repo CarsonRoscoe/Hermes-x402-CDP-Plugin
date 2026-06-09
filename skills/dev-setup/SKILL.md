@@ -84,11 +84,11 @@ hermes x402 status   # verify wallet address + balance
 
 ## Key architecture facts
 
-**Two wallet surfaces, one active at a time (`x402.provider`):**
+**Wallet provider status (`x402.provider`):**
 - `local` (default): self-custodial CDP server wallet via the CDP SDK in-process.
   `hermes_x402.cdp` is the single source of truth for all CDP logic.
-- `coinbase_mcp` (Coming Soon): remote hosted Coinbase MCP (OAuth). `coinbase_mcp/`
-  is wired for this future provider; it raises a clear error today.
+- `coinbase_mcp` (Coming Soon): remote hosted Coinbase MCP (OAuth). It is not selectable
+  today; unsupported provider values normalize back to `local`.
 
 **Paid-call tools (always present):**
 - `x402_request` — paid HTTP (`tools/request.py`)
@@ -99,7 +99,7 @@ hermes x402 status   # verify wallet address + balance
   `cdp_transfer`, `cdp_payments`
 
 **Shared plumbing:**
-- `coinbase_mcp/payment_client.py` — signer seam + cap gates (routes to local CDP or remote)
+- `coinbase_mcp/payment_client.py` — signer seam + cap gates (local CDP today, remote later)
 - `tools/_paid.py` — cap resolution, error mapping, journal + idempotency
 - `ledger.py` — SQLite spend ledger + payment journal
 - `mcp_client.py` — MCP transport, `McpSessionAdapter`, `with_timeout`

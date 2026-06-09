@@ -1,10 +1,15 @@
 # Paying with x402
 
+> **Note:** The `hermes setup --coinbase` flag described below requires a separate PR to
+> `hermes-agent` that is not yet merged. Until that PR lands, use `hermes x402 init`
+> from the companion CLI directly. All other functionality described here is available
+> via the `hermes-x402` pip package today.
+
 Hermes can pay for HTTP and MCP **tools** with USDC micropayments over the
 [x402](https://github.com/x402-foundation/x402) protocol. By default the plugin uses a
 **self-custodial CDP server wallet** (keys stored locally in your CDP account, signed
-in-process via the CDP SDK). A hosted Coinbase MCP signer is available as an alternative
-provider (`x402.provider: coinbase_mcp`) but is not yet released.
+in-process via the CDP SDK). This local wallet provider is the only selectable provider
+today; a hosted Coinbase MCP signer is future work and is not enabled by config.
 (Paying for *inference* via `provider: x402` is out of scope for now.)
 
 ## Quick start
@@ -15,14 +20,19 @@ pip install hermes-x402
 #   CDP_API_KEY_ID=...
 #   CDP_API_KEY_SECRET=...
 #   CDP_WALLET_SECRET=...
-hermes setup --coinbase     # provision the CDP wallet + register the Bazaar MCP server
+# Companion CLI (always available):
+hermes x402 init      # provisions wallet, registers Bazaar MCP, enables plugin in config
 hermes x402 status
+# If your Hermes build includes the upstream --coinbase flag (requires hermes-agent PR):
+# hermes setup --coinbase
 ```
 
 Or step by step:
 
 ```bash
-hermes plugins enable hermes-x402
+# pip plugins are opt-in via config:
+# plugins:
+#   enabled: [hermes-x402]
 hermes x402 init
 hermes x402 balance         # check wallet balance (use cdp_faucet on testnet to fund)
 ```
@@ -36,6 +46,8 @@ hermes x402 balance         # check wallet balance (use cdp_faucet on testnet to
 - Two payment tools: `x402_request` (paid HTTP to a known URL) and
   `x402_retry_mcp_payment` (pay + retry any `mcp_*` call that returned payment-required).
 - Per-call and per-session USDC budgets (`x402.max_price_usdc`, `x402.session_budget_usdc`).
+  The session budget covers x402 paid HTTP/MCP calls, not direct wallet transfers through
+  `cdp_transfer`.
 - A spend ledger: `hermes x402 spend` / `hermes x402 payments`.
 
 ## How it works

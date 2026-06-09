@@ -5,9 +5,9 @@
 This repo holds the **companion plugin** — the half of the integration where the magic
 lives. It lets a Hermes agent discover and call paid HTTP and MCP services with USDC
 micropayments. The default **`local` provider** runs a **self-custodial CDP server wallet**
-in-process (via the CDP SDK) and adds native `cdp_*` wallet-management tools. A future
-**`coinbase_mcp` provider** (remote hosted signer) is **Coming Soon**; exactly one provider
-is active at a time, chosen by `x402.provider`.
+in-process (via the CDP SDK) and adds native `cdp_*` wallet-management tools. This is the
+only selectable wallet provider today; remote hosted Coinbase MCP signing is future work
+and is not enabled by `x402.provider`.
 
 > Paying for **inference** via `provider: x402` is intentionally out of scope for now (it
 > needs `upto` / `batch-settlement` schemes we are not implementing yet). The plugin pays
@@ -39,19 +39,17 @@ hermes-x402-plugin/
 Both transports reach the wallet through **one** method — `create_payment_payload(PaymentRequired)
 -> PaymentPayload` — so HTTP and MCP payments work by swapping the signer with no
 per-transport reshaping. The per-call budget gates live in the payment client; signing is
-delegated to the active provider:
+currently delegated to the local provider:
 
 - **local** (default): `cdp/signer.py` signs in-process via the CDP SDK (`EvmLocalAccount`),
   selecting an exact EVM (EIP-3009) requirement and skipping Permit2.
-- **coinbase_mcp** (Coming Soon): forwards `PaymentRequired` to the Coinbase MCP's
-  `create_payment_payload` tool, which selects which `PaymentRequirements` to pay.
 
-Wallet address/balance route through a provider-aware facade (local: the CDP SDK; remote:
-the Coinbase MCP's `coinbase_balance` / `coinbase_status`).
+Some `coinbase_mcp/` plumbing remains in the tree as the future remote-signer seam, but
+the shipped plugin routes wallet address, balance, and signing through the local CDP SDK.
 
-## Quick start (dev, against the fake)
+## Quick start (dev, local CDP provider)
 
-**1. Install Hermes** from the local clone (requires Python 3.11+):
+**1. Install Hermes** from the local clone (requires Python 3.10+):
 
 ```bash
 cd /path/to/hermes-agent
@@ -87,10 +85,10 @@ providers:
     key_env: MY_LLM_API_KEY
 
 x402:
-  provider: local               # self-custodial CDP server wallet (default)
+  provider: local               # only selectable provider today
   network: base-sepolia
   max_price_usdc: 0.10
-  session_budget_usdc: 5.0
+  session_budget_usdc: 5.0      # x402 paid calls only, not direct cdp_transfer
   failure_mode: strict
 ```
 
@@ -103,35 +101,33 @@ echo 'CDP_API_KEY_SECRET=<...>'    >> ~/.hermes/.env
 echo 'CDP_WALLET_SECRET=<...>'     >> ~/.hermes/.env
 ```
 
-**5. Enable the plugin** in `~/.hermes/config.yaml`:
+**5. Onboard and run:**
 
-> `hermes plugins enable` only works for directory-based plugins. Pip-installed plugins
-> must be listed in config manually.
-
-```yaml
-plugins:
-  enabled:
-    - hermes-x402
-```
-
-**6. Onboard and run:**
+> `hermes x402 init` automatically adds `hermes-x402` to `plugins.enabled` in config.yaml.
+> If you skip onboarding, add it manually:
+> ```yaml
+> plugins:
+>   enabled:
+>     - hermes-x402
+> ```
 
 ```bash
-hermes x402 init      # provisions the CDP wallet, registers the Bazaar MCP
+hermes x402 init      # provisions CDP wallet, registers Bazaar MCP, enables plugin in config
 hermes x402 status    # confirm provider + wallet + balance
 hermes                # start chatting (testnet funds: ask it to call cdp_faucet)
 ```
 
-The `coinbase_mcp` provider is Coming Soon; the plugin code already supports it behind
-`x402.provider: coinbase_mcp`.
+The remote `coinbase_mcp` signer is Coming Soon and intentionally not selectable yet.
+Setting `x402.provider: coinbase_mcp` falls back to `local` in this pre-alpha release.
 
 ## Native MCP servers
 
 Onboarding writes into `mcp_servers:` in `~/.hermes/config.yaml`:
 
 - `bazaar` — the public CDP Bazaar MCP (`search_resources` + `proxy_tool_call`). Always present.
-- `coinbase` — the Coinbase MCP signer. Only present in the `coinbase_mcp` provider; removed
-  in `local` mode (where the native `cdp_*` tools manage the wallet instead).
+
+Onboarding also removes stale `coinbase` MCP signer entries from earlier experiments. The
+local provider uses native `cdp_*` tools and in-process signing instead.
 
 The agent calls these natively (`mcp_*`).
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 
 from . import config, ledger
+from .session import current_session_id
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,21 @@ def pre_tool_call(tool_name=None, args=None, task_id=None, **kwargs):
         budget = config.session_budget_usdc()
         if budget <= 0:
             return None
-        spent = ledger.session_total(task_id)
+        session_id = current_session_id(kwargs)
+        if not session_id:
+            if config.is_strict():
+                return {
+                    "action": "block",
+                    "message": (
+                        "x402 session budget could not be enforced because no Hermes session id "
+                        "was available; refusing paid call under strict failure_mode."
+                    ),
+                }
+            logger.warning(
+                "hermes-x402: session id unavailable; skipping session budget check (best-effort)"
+            )
+            return None
+        spent = ledger.session_total(session_id)
 
         from .tools._paid import effective_cap  # local import avoids an import cycle
 

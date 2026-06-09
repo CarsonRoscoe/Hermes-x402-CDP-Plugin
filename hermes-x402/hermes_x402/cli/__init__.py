@@ -30,6 +30,12 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     rec = subs.add_parser("reconcile", help="List/resolve unconfirmed paid operations")
     rec.add_argument("--resolve", help="Journal entry id to mark resolved")
     rec.add_argument("--state", help="Resolved state: paid | failed | succeeded")
+    rec.add_argument(
+        "--check",
+        action="store_true",
+        default=False,
+        help="Show explorer URLs and wallet balance for each open entry to assist on-chain verification",
+    )
 
     subparser.set_defaults(func=x402_command)
 

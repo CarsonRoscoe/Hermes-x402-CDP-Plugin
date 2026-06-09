@@ -14,9 +14,12 @@ Rows 2 and 3 share the same payment path.
 
 | Server | Auth | Agent sees | Notes |
 |---|---|---|---|
-| Coinbase MCP | OAuth / CAT (dev: none) | `create_payment_payload`, `coinbase_balance`, `coinbase_status`, etc. | Plugin also connects internally for `x402_retry_mcp_payment` signing |
 | Bazaar MCP | None | `search_resources`, `proxy_tool_call` | Public endpoint, no auth needed |
 | Any other paid MCP server | Per-server | All their tools natively | Paid tools handled by `x402_retry_mcp_payment` |
+
+The local CDP wallet is the only selectable signer provider today. Remote Coinbase MCP
+signing remains future work; onboarding registers Bazaar and removes stale `coinbase`
+signer entries.
 
 ## Plugin tool surface (two tools)
 
@@ -30,8 +33,9 @@ Rows 2 and 3 share the same payment path.
 1. Agent calls any `mcp_*` tool → gets a payment-required result (often just an error string)
 2. Skill: call `x402_retry_mcp_payment(tool_name, arguments)` (pass `payment_required` only if you have the structured details — best-effort)
 3. Plugin parses `mcp_{server}_{tool}` → looks up server URL from Hermes `mcp_servers` config, recovering the real upstream tool name from the server's tool list
-4. Calls Coinbase MCP `create_payment_payload(...)` → signed `PaymentPayload` (re-probing the server for the requirement when `payment_required` was not supplied)
+4. Calls the local CDP signer through the shared `create_payment_payload(...)` seam → signed `PaymentPayload` (re-probing the server for the requirement when `payment_required` was not supplied)
 5. Connects to the server, retries with `_meta["x402/payment"]`
 6. Returns the real result
 
-The agent uses native tool names throughout. It can also call `create_payment_payload` directly if it wants to understand the payment — the plugin is transparent, not a black box.
+The agent uses native tool names throughout. Payment signing stays internal to
+`x402_request` / `x402_retry_mcp_payment` so the model follows one safe path.

@@ -168,6 +168,36 @@ def session_total(session_id: str | None) -> float:
         return 0.0
 
 
+def session_transfer_total(session_id: str | None) -> float:
+    """Return total USDC directly transferred (kind='transfer') in a session."""
+    if not session_id:
+        return 0.0
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(amount_usdc), 0) FROM payments"
+                " WHERE session_id = ? AND kind = 'transfer'",
+                (session_id,),
+            ).fetchone()
+            return float(row[0] or 0)
+    except Exception as exc:
+        logger.debug("hermes-x402: failed to total session transfer spend: %s", exc)
+        return 0.0
+
+
+def all_time_total() -> float:
+    """Return the all-time total USDC recorded across all sessions."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(amount_usdc), 0) FROM payments"
+            ).fetchone()
+            return float(row[0] or 0)
+    except Exception as exc:
+        logger.debug("hermes-x402: failed to compute all-time total: %s", exc)
+        return 0.0
+
+
 def on_session_end(session_id=None, completed=None, interrupted=None, **kwargs) -> None:
     """``on_session_end`` hook: log a one-line spend summary. Never raises."""
     try:

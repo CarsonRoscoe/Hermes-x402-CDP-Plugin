@@ -10,7 +10,7 @@ import base64
 import hashlib
 import json
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from .. import config, ledger
 
@@ -89,7 +89,9 @@ def payment_error(exc: Exception, cap: float, label: str) -> dict:
     return {"error": f"{label} failed: {exc}"}
 
 
-def record_paid_call(*, kind: str, amount_usdc: float, endpoint: str, transaction, task_id) -> None:
+def record_paid_call(
+    *, kind: str, amount_usdc: float, endpoint: str, transaction, session_id: str | None
+) -> None:
     """Record a settled payment to the ledger (single seam for HTTP + MCP tools)."""
     ledger.record_payment(
         kind=kind,
@@ -97,7 +99,7 @@ def record_paid_call(*, kind: str, amount_usdc: float, endpoint: str, transactio
         network=config.network(),
         endpoint=endpoint,
         transaction=transaction,
-        session_id=task_id,
+        session_id=session_id,
     )
 
 
@@ -169,6 +171,17 @@ def run_journaled(
     ``run`` performs the actual paid call and returns ``(output_dict, amount_usdc, tx)`` or
     raises. Returns the JSON string the tool should hand back.
     """
+    if config.session_budget_usdc() > 0 and not session_id and config.is_strict():
+        return json.dumps(
+            {
+                "error": "session_identity_unavailable",
+                "message": (
+                    "x402 session budget is configured but no Hermes session id was available; "
+                    "refusing paid call under strict failure_mode."
+                ),
+            }
+        )
+
     fingerprint = operation_fingerprint(
         kind=kind, endpoint=endpoint, arguments=arguments,
         requirement=requirement, idempotency_key=idempotency_key,

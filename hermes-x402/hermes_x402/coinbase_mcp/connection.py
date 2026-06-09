@@ -1,10 +1,15 @@
-"""Internal connection to the remote Coinbase MCP server (Coming Soon).
+"""FUTURE WORK — NOT ACTIVE IN THE CURRENT RELEASE.
 
-This module is wired for the ``coinbase_mcp`` provider, which is not yet available. When the
-hosted Coinbase MCP ships it will provide signing + wallet reads via this transport; the
-plugin will route to it in place of the local CDP wallet.
+This module contains plumbing for the remote Coinbase MCP signing provider, which is not
+yet available. ``WALLET_PROVIDERS = ("local",)`` in ``config.py`` means
+``normalize_provider()`` always returns ``"local"``, so the ``coinbase_mcp`` provider
+branch in ``payment_client.py`` is unreachable. This file exists only to pre-wire the
+seam so the transition requires minimal changes when the remote signer ships.
 
-Config (future, ``x402.coinbase_mcp`` in config.yaml) ::
+No code in this module is executed during normal plugin operation. Any import of
+symbols from here outside of tests or future-provider bringup is a bug.
+
+When the remote Coinbase MCP ships, the config block will look like::
 
     x402:
       provider: coinbase_mcp         # switch from "local" when available
@@ -12,9 +17,6 @@ Config (future, ``x402.coinbase_mcp`` in config.yaml) ::
         transport: remote
         url: https://mcp.coinbase.com/mcp
         auth_token_env: COINBASE_MCP_TOKEN   # OAuth/CAT bearer
-
-Today, ``provider: local`` (the default) uses the CDP SDK in-process and never opens
-this connection.
 """
 
 from __future__ import annotations

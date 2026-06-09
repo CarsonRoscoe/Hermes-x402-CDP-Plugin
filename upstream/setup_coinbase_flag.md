@@ -1,5 +1,10 @@
 # Adding `hermes setup --coinbase` (minimal upstream change)
 
+> **Status: Proposed — not yet merged into `hermes-agent`.**
+> This document describes the changes required to add the `--coinbase` flag to
+> `hermes-agent`. Until this PR is merged, users should use `hermes x402 init`
+> from the companion CLI directly.
+
 Mirrors the existing `--portal` one-shot path. Two edits, both small.
 
 ## 1. `hermes_cli/main.py` — add the flag
@@ -39,18 +44,15 @@ def _run_x402_one_shot(config: dict) -> None:
 
 ## What `run_x402_onboarding` does (all in the companion)
 
-1. **Provider selection** (interactive TTY): shows `1) Local CDP Tools` and
-   `2) Remote Coinbase MCP — Coming Soon!`. The remote option is visible but locked;
-   selecting it falls back to local. Non-interactive: defaults to `local`.
+1. **Provider selection**: fixed to `local` (self-custodial CDP server wallet).
 
 2. **Credential check + wallet provisioning** (local provider): reads
    `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET` from `~/.hermes/.env`.
    If missing, prints specific instructions and exits cleanly (no crash). If present,
    provisions (or reuses) a named CDP server wallet via the CDP SDK and prints the address.
 
-3. **MCP servers**: registers only `bazaar` (discovery + proxy) under `mcp_servers` in
-   local mode. The `coinbase` entry is removed if stale. In `coinbase_mcp` mode both
-   `coinbase` + `bazaar` are added.
+3. **MCP servers**: registers `bazaar` (discovery + proxy) under `mcp_servers`.
+   Any stale `coinbase` entry is removed.
 
 4. **Balance + funding hint**: reads on-chain USDC; if empty, prints `cdp_faucet`
    (testnet) or `cdp_onramp` (mainnet) instructions.
@@ -66,5 +68,3 @@ def _run_x402_one_shot(config: dict) -> None:
   the Bazaar MCP. (No `provider: x402` registration — inference payment is out of scope.)
 - Local mode requires CDP credentials (`CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`,
   `CDP_WALLET_SECRET`). These go in `~/.hermes/.env`, never in `config.yaml`.
-- The `coinbase_mcp` provider (remote hosted signer) is Coming Soon; when it ships the
-  flag and this seam are unchanged — only the companion needs updating.

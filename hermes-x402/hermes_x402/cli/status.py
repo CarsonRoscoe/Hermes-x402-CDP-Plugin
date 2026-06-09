@@ -18,7 +18,7 @@ def _gather() -> dict:
 
     provider = config.wallet_provider()
     out: dict = {"network": config.network(), "provider": provider}
-    out["signer"] = "local CDP wallet" if provider == "local" else "coinbase-mcp (coming soon)"
+    out["signer"] = "local CDP wallet"
     try:
         out["address"] = wallet.address()
         out["usdc_balance"] = wallet.usdc_balance(config.network())

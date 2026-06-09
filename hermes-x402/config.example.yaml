@@ -23,9 +23,7 @@
 
 # --- x402 plugin ---
 x402:
-  # Wallet provider:
-  #   local        -> self-custodial CDP server wallet + native cdp_* tools (default)
-  #   coinbase_mcp -> remote hosted Coinbase MCP signer (Coming Soon — not yet selectable)
+  # Wallet provider (currently only local CDP tools).
   provider: local
 
   # CDP server-wallet account name (local provider).
@@ -40,12 +38,8 @@ x402:
   #   CDP_WALLET_SECRET=...
   # Fund the wallet: testnet via the cdp_faucet tool; mainnet via the cdp_onramp tool.
 
-  # Remote provider settings (only used when provider: coinbase_mcp).
-  # coinbase_mcp:
-  #   transport: stdio   # dev fake stand-in; the venv-local binary is auto-resolved
-  #   # url / auth_token_env for a hosted remote signer
-
-  # Per-call USDC cap and session ceiling. The per-call cap also guards cdp_transfer (USDC).
+  # Per-call USDC cap and session ceiling. The session ceiling covers x402 paid calls.
+  # Direct cdp_transfer is not an x402 payment; USDC transfers use the per-call cap only.
   max_price_usdc: 0.10
   session_budget_usdc: 5.0
 

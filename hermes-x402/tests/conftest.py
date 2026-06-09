@@ -15,5 +15,6 @@ def isolated_home(tmp_path, monkeypatch):
     cdp_client.wallet._address = None
     cdp_client.wallet._account_name = None
     cdp_client.wallet._account = None
-    cdp_client.wallet._lock = __import__("asyncio").Lock()
+    cdp_client.wallet._lock = None
+    cdp_client.wallet._lock_loop = None
     yield

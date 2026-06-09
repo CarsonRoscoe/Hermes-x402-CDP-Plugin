@@ -15,8 +15,6 @@ from __future__ import annotations
 import logging
 import os
 
-from . import config
-
 logger = logging.getLogger(__name__)
 
 TESTNET_FACILITATOR_URL = "https://x402.org/facilitator"
@@ -41,5 +39,4 @@ def facilitator_config():
 
     from x402 import FacilitatorConfig
 
-    url = config.CDP_FACILITATOR_URL if _has_cdp_creds() else TESTNET_FACILITATOR_URL
-    return FacilitatorConfig(url=url)
+    return FacilitatorConfig(url=TESTNET_FACILITATOR_URL)

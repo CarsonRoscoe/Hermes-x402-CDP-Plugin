@@ -42,12 +42,11 @@ def ledger_path() -> Path:
 
 
 # CDP x402 facilitator (production). Testnet is https://x402.org/facilitator (no auth).
-# Used by the monetize (server) side; the client signs via the Coinbase MCP.
+# Used by the monetize (server) side.
 CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
 
 # CDP Bazaar MCP server: discovery (search_resources) + paid proxy (proxy_tool_call).
-# Public, no auth, streamable HTTP. We connect to it on startup in addition to the
-# Coinbase MCP signer.
+# Public, no auth, streamable HTTP.
 BAZAAR_MCP_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/mcp"
 
 # USDC has 6 decimals; amounts on the wire are integer base units.
@@ -59,9 +58,8 @@ EVM_CAIP2 = {"base": "eip155:8453", "base-sepolia": "eip155:84532"}
 # Default timeout: 60s per paid operation.
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
-# Wallet providers. "local" (self-custodial CDP server wallet via the CDP SDK, the only
-# implemented provider) or "coinbase_mcp" (remote hosted Coinbase MCP — coming soon).
-WALLET_PROVIDERS = ("local", "coinbase_mcp")
+# Wallet provider(s). Only local self-custodial CDP server wallet is selectable today.
+WALLET_PROVIDERS = ("local",)
 
 # Substrings that mark a network as a testnet (faucet-eligible; onramp-ineligible).
 _TESTNET_MARKERS = ("sepolia", "hoodi", "testnet", "amoy", "mumbai", "fuji", "devnet")
@@ -77,14 +75,18 @@ def caip2(net: str | None = None) -> str:
 
 # Defaults; each is overridable under the `x402:` section of config.yaml.
 DEFAULTS = {
-    # Wallet/signing provider. "local" = self-custodial CDP server wallet + native cdp_*
-    # tools (implemented). "coinbase_mcp" = remote hosted Coinbase MCP (coming soon).
+    # Wallet/signing provider (local self-custodial CDP server wallet).
     "provider": "local",
     # CDP server-wallet account name used by the local provider.
     "cdp_account_name": DEFAULT_CDP_ACCOUNT_NAME,
     "network": "base-sepolia",  # testnet default; change to "base" for mainnet
-    "max_price_usdc": 1.0,  # per-call cap
-    "session_budget_usdc": 10.0,  # cumulative cap per session
+    "max_price_usdc": 1.0,  # per-call cap (applies to x402 payments and cdp_transfer)
+    "session_budget_usdc": 10.0,  # cumulative cap per session for x402 paid calls
+    # Cumulative cap on direct wallet transfers (cdp_transfer) per session.
+    # Defaults to session_budget_usdc. Set 0 to disable the aggregate transfer cap
+    # (not recommended on mainnet). Unlike session_budget_usdc this covers direct
+    # wallet transfers rather than x402 payments.
+    "session_transfer_budget_usdc": None,
     # Failure posture for money guards. "strict" (default) fails closed: a paid call is
     # refused when a guard (budget, settlement) cannot be verified. "best-effort" prefers
     # availability and allows the call when a guard errors.
@@ -121,7 +123,7 @@ def plugin_config() -> dict:
 
 
 def network() -> str:
-    return str(plugin_config().get("network") or "base")
+    return str(plugin_config().get("network") or "base-sepolia")
 
 
 def is_testnet(net: str | None = None) -> bool:
@@ -130,13 +132,13 @@ def is_testnet(net: str | None = None) -> bool:
 
 
 def normalize_provider(value: object) -> str:
-    """Coerce a raw provider value to a valid one (default ``"local"``)."""
+    """Coerce a raw provider value to the only supported provider, ``"local"``."""
     p = str(value or "local").strip().lower()
     return p if p in WALLET_PROVIDERS else "local"
 
 
 def wallet_provider() -> str:
-    """Active wallet provider: ``"local"`` (default) or ``"coinbase_mcp"``."""
+    """Active wallet provider (currently only ``"local"``)."""
     return normalize_provider(plugin_config().get("provider"))
 
 
@@ -194,6 +196,23 @@ def max_price_usdc() -> float:
 
 def session_budget_usdc() -> float:
     return float(plugin_config().get("session_budget_usdc") or 0) or 0.0
+
+
+def session_transfer_budget_usdc() -> float:
+    """Cumulative per-session cap for direct wallet transfers (cdp_transfer).
+
+    Defaults to ``session_budget_usdc`` when not explicitly configured.
+    Returns 0.0 when both values are unset (no cap).
+    """
+    cfg = plugin_config()
+    raw = cfg.get("session_transfer_budget_usdc")
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    # Fall back to the x402 session budget as a sensible default ceiling.
+    return session_budget_usdc()
 
 
 def failure_mode() -> str:

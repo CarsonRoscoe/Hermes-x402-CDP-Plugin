@@ -8,7 +8,7 @@ thin upstream addition to Hermes that delegates to this package's
 
 ```mermaid
 flowchart TD
-  start["hermes setup --coinbase"] --> provider["Select wallet provider (local CDP, default)"]
+  start["hermes setup --coinbase"] --> provider["Use local CDP wallet provider"]
   provider --> creds["Validate CDP credentials (CDP_API_KEY_ID, SECRET, WALLET_SECRET)"]
   creds --> wallet["Provision CDP server wallet (get_or_create_account)"]
   wallet --> register["Register Bazaar MCP under mcp_servers"]
@@ -17,8 +17,8 @@ flowchart TD
   budgets --> save["Save config + print next steps"]
 ```
 
-1. **Provider** — selects `local` (self-custodial CDP server wallet). Remote Coinbase MCP
-   is Coming Soon and shown as unselectable.
+1. **Provider** — uses `local` (self-custodial CDP server wallet). Remote Coinbase MCP is
+   future work and not selectable in this release.
 2. **Credentials** — reads `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET` from
    `~/.hermes/.env`. Prints specific instructions if any are missing; exits cleanly.
 3. **Wallet** — calls `CdpClient().evm.get_or_create_account("hermes-x402")`. No new wallet
@@ -49,7 +49,9 @@ pip install hermes-x402
 #   CDP_API_KEY_ID=...
 #   CDP_API_KEY_SECRET=...
 #   CDP_WALLET_SECRET=...
-hermes plugins enable hermes-x402
+# pip plugins must be listed in config manually:
+# plugins:
+#   enabled: [hermes-x402]
 hermes x402 init        # same flow as hermes setup --coinbase
 hermes x402 status      # verify wallet + balance
 ```

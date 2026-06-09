@@ -46,7 +46,6 @@ async def get_weather(city: str) -> str:
 
 The CDP facilitator config (`hermes_x402.facilitator.facilitator_config`) powers
 **monetization** (verify/settle), while buyers discover through the native Bazaar MCP. The
-Coinbase MCP
-signs outgoing payments and reports the wallet address used as the **payout target**
-(`monetize.paid_tool` defaults `pay_to` to it). An agent can therefore be both a buyer and a
-seller in the x402 economy with a single custodial wallet behind the Coinbase MCP.
+buyer path signs outgoing payments with the local CDP wallet provider. `monetize.paid_tool`
+defaults `pay_to` to that same wallet address, so an agent can act as both buyer and seller
+without requiring the future hosted Coinbase MCP signer.

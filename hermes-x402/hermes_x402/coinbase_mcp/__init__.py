@@ -1,10 +1,8 @@
-"""Client side of the Coinbase MCP integration.
+"""Payment-client seam shared by local CDP signing and future remote signer plumbing.
 
-Signing is delegated to a Coinbase MCP server (OAuth'd, remote in prod; a local stdio
-fake in dev). This package holds the connection to that server, the payment-client seam
-the x402 SDK plugs into, and a thin read facade for balance/identity.
-
-Nothing here holds key material — the Coinbase MCP signs on the user's behalf.
+In this release, signing is local via ``hermes_x402.cdp.signer``. The MCP connection
+objects remain for future hosted signer support and for compatibility with existing code
+that imports ``coinbase_mcp.*`` paths.
 """
 
 from __future__ import annotations

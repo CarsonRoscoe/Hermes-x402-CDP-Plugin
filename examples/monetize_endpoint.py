@@ -2,7 +2,7 @@
 
 Uses the plugin's ``hermes_x402.monetize.paid_tool`` helper to charge other agents USDC to
 call a FastMCP tool, settled through the CDP facilitator and declared for bazaar discovery.
-The payout address defaults to the wallet the Coinbase MCP reports (override with
+The payout address defaults to the local CDP wallet address (override with
 ``PAYOUT_ADDRESS``).
 
 Run:
@@ -25,7 +25,7 @@ def build_server():
     charge = paid_tool(
         price_usdc="0.01",
         resource_url="mcp://tool/get_weather",
-        pay_to=os.environ.get("PAYOUT_ADDRESS"),  # None => use Coinbase MCP wallet
+        pay_to=os.environ.get("PAYOUT_ADDRESS"),  # None => use local CDP wallet
         description="Current weather by city",
     )
 

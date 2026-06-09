@@ -13,7 +13,6 @@ awaited from inside the async payment client.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from .._async import run_async
 from .client import wallet

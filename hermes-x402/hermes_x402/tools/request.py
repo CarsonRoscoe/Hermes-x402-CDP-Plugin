@@ -1,10 +1,10 @@
 """x402_request — make an x402-paying HTTP request.
 
 Uses the x402 async HTTP client (``x402HttpxClient``), whose transport transparently
-handles the ``402 -> sign -> retry`` flow. Signing is delegated to the Coinbase MCP via
-``CoinbaseMcpPaymentClient`` — no key in the plugin. The per-call cap is enforced in the
-payment client (it refuses before signing if the cheapest accepted requirement exceeds the
-cap); the session budget is enforced by the ``pre_tool_call`` gate.
+handles the ``402 -> sign -> retry`` flow. Signing is delegated via
+``CoinbaseMcpPaymentClient`` (local provider uses the in-process CDP signer). The per-call
+cap is enforced in the payment client (it refuses before signing if the cheapest accepted
+requirement exceeds the cap); the session budget is enforced by the ``pre_tool_call`` gate.
 
 Returns a JSON string: ``{status, body, payment: {...} | null}`` on success, or
 ``{error, detail, ...}`` with actionable context on every failure path.
@@ -16,7 +16,8 @@ import json
 import logging
 
 from .. import config
-from .._async import run_async
+from .._async import UnknownSettlementError, run_async
+from ..session import current_session_id
 from ._paid import (
     StructuredToolError,
     decode_x402_header,
@@ -59,7 +60,7 @@ def _decode_payment_required(headers) -> dict | None:
     return None
 
 
-def _classify_402(exc: "_Payment402Error") -> dict:
+def _classify_402(exc: _Payment402Error) -> dict:
     """Build an actionable error dict for a 402 result, with full raw server context."""
     status_code = exc.status
     resp_text = exc.text or ""
@@ -173,10 +174,18 @@ async def _do_fetch(url, method, headers, body, cap_usdc):
         # Unwrap the inner cause for a more useful message.
         inner = exc.__cause__ or exc
         inner_msg = str(inner)
+        # Detect Permit2-only endpoint: NoMatchingRequirementsError means the signer found no
+        # compatible requirement after filtering (e.g. all accepted methods were Permit2).
+        if "NoMatchingRequirements" in type(inner).__name__ or "NoMatchingRequirements" in inner_msg:
+            raise _IncompatibleSchemeError(
+                "No compatible payment requirement found. This endpoint may only accept Permit2, "
+                "which is not supported by this wallet (EIP-3009 only). Check the service's "
+                "accepts[] list for assetTransferMethod.",
+            ) from exc
         raise _PaymentSigningError(
             f"Payment signing failed: {inner_msg}",
             inner=inner_msg,
-            signing_occurred=payment_client.last_min_usdc is not None,
+            signing_occurred=payment_client.last_payload_signed,
         ) from exc
 
     payment = _decode_payment_response(resp.headers)
@@ -184,8 +193,7 @@ async def _do_fetch(url, method, headers, body, cap_usdc):
     if resp.status_code == 402:
         # Use the PAYMENT-REQUIRED from the response headers (may be absent on the retry 402).
         payment_required = _decode_payment_required(resp.headers)
-        # Whether the SDK actually signed and retried (last_min_usdc is set after signing).
-        signing_occurred = payment_client.last_min_usdc is not None
+        signing_occurred = payment_client.last_payload_signed
         raise _Payment402Error(
             resp.status_code, resp.text, dict(resp.headers),
             payment_required, signing_occurred, payment_client.last_min_usdc,
@@ -202,11 +210,24 @@ class _PaymentSigningError(StructuredToolError):
             "inner": inner,
             "signing_occurred": signing_occurred,
             "hint": (
-                "Check that the Coinbase MCP signer is running and CDP credentials are set. "
-                "Run `hermes x402 status` to confirm the signer is connected."
+                "Check that CDP credentials are set and the local wallet is provisioned. "
+                "Run `hermes x402 status` to confirm signer + wallet health."
             ),
         })
         self.inner = inner
+
+
+class _IncompatibleSchemeError(StructuredToolError):
+    def __init__(self, msg):
+        super().__init__({
+            "error": "incompatible_scheme",
+            "detail": msg,
+            "hint": (
+                "This wallet signs EIP-3009 (exact scheme) only. Permit2 and other transfer "
+                "methods are not supported. Choose a service whose accepts[] includes an "
+                "EIP-3009-compatible requirement (assetTransferMethod absent or 'erc3009')."
+            ),
+        })
 
 
 class _Payment402Error(Exception):
@@ -230,12 +251,18 @@ def x402_request(args: dict, **kwargs) -> str:
     url = args.get("url", "")
     if not url:
         return json.dumps({"error": "url is required"})
+    if not str(url).startswith("https://"):
+        return json.dumps({
+            "error": "invalid_url",
+            "detail": f"x402 requires HTTPS endpoints; got: {str(url)[:200]!r}",
+            "hint": "Provide a URL starting with https://",
+        })
 
     method = (args.get("method") or "GET").upper()
     headers = args.get("headers") or {}
     body = args.get("body")
     cap = effective_cap(args.get("max_price_usdc"))
-    session_id = kwargs.get("task_id")
+    session_id = current_session_id(kwargs)
 
     def run():
         try:
@@ -245,11 +272,30 @@ def x402_request(args: dict, **kwargs) -> str:
 
         tx = payment.get("transaction") if isinstance(payment, dict) else None
         amount = price if price is not None else (_amount_from_payment(payment) if payment else 0.0)
+        # Use last_payload_signed to align with the MCP path's payment_made semantics:
+        # True only when a payment payload was successfully created and submitted (not merely
+        # when a requirement was seen). price is still used for the ledger amount.
+        payment_attempted = bool(price is not None)
+        payment_settled = payment is not None
+        if payment_attempted and not payment_settled:
+            raise UnknownSettlementError(
+                "payment payload was submitted but PAYMENT-RESPONSE was missing on success; "
+                "check cdp_payments or run `hermes x402 reconcile` before retrying"
+            )
         if payment:
             record_paid_call(
-                kind="http", amount_usdc=amount, endpoint=url, transaction=tx, task_id=session_id
+                kind="http", amount_usdc=amount, endpoint=url, transaction=tx, session_id=session_id
             )
-        out = {"status": status, "body": text[:50_000], "payment": payment}
+        _body_limit = 50_000
+        out = {
+            "status": status,
+            "body": text[:_body_limit],
+            "body_truncated": len(text) > _body_limit,
+            "payment": payment,
+            "payment_made": payment_attempted,
+            "payment_settled": payment_settled,
+            "price_usdc": (amount if payment_attempted else None),
+        }
         return out, (amount if payment else None), tx
 
     return run_journaled(
