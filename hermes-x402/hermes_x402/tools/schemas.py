@@ -261,7 +261,8 @@ CDP_TRANSFER = {
         "a cumulative per-session ceiling (x402.session_transfer_budget_usdc, defaults to "
         "x402.session_budget_usdc). The per-call cap can be bypassed with override=true, but "
         "the session ceiling cannot. "
-        "NOTE: ETH transfers have no per-session aggregate cap — only the per-call cap applies. "
+        "ETH transfers are also guarded by a per-session ceiling "
+        "(x402.session_transfer_budget_eth, defaults to x402.session_transfer_budget_usdc). "
         "Call cdp_wallet_balance first to confirm the wallet has sufficient funds."
     ),
     "parameters": {

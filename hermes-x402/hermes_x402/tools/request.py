@@ -29,6 +29,23 @@ from ._paid import (
 
 logger = logging.getLogger(__name__)
 
+try:
+    from x402.schemas import NoMatchingRequirementsError as _NoMatchingRequirementsError
+except Exception:  # pragma: no cover - dependency shape varies across SDK versions
+    _NoMatchingRequirementsError = None
+
+
+def _is_no_matching_requirements_error(exc: Exception) -> bool:
+    if _NoMatchingRequirementsError is not None and isinstance(exc, _NoMatchingRequirementsError):
+        return True
+    inner = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if _NoMatchingRequirementsError is not None and inner is not None:
+        if isinstance(inner, _NoMatchingRequirementsError):
+            return True
+    name = type(exc).__name__
+    msg = str(exc)
+    return "NoMatchingRequirements" in name or "NoMatchingRequirements" in msg
+
 
 # --------------------------------------------------------------------------- #
 # Response parsing helpers
@@ -176,7 +193,7 @@ async def _do_fetch(url, method, headers, body, cap_usdc):
         inner_msg = str(inner)
         # Detect Permit2-only endpoint: NoMatchingRequirementsError means the signer found no
         # compatible requirement after filtering (e.g. all accepted methods were Permit2).
-        if "NoMatchingRequirements" in type(inner).__name__ or "NoMatchingRequirements" in inner_msg:
+        if _is_no_matching_requirements_error(inner):
             raise _IncompatibleSchemeError(
                 "No compatible payment requirement found. This endpoint may only accept Permit2, "
                 "which is not supported by this wallet (EIP-3009 only). Check the service's "

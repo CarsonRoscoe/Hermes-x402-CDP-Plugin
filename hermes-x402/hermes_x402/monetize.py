@@ -2,9 +2,12 @@
 
 Lets an agent stand up a *paid* MCP tool: wrap a FastMCP tool with x402's
 ``create_payment_wrapper`` backed by an ``x402ResourceServer`` on the CDP facilitator, and
-declare bazaar discovery metadata so the endpoint becomes discoverable. After one
-successful settlement through the CDP facilitator, the resource is indexed in the Coinbase
-Bazaar automatically.
+declare Bazaar discovery metadata alongside the payment requirements.
+
+``declare_mcp_discovery_extension()`` only attaches extension metadata to the wrapped MCP
+tool. It does not itself perform out-of-band registration or indexing calls; whether and
+when the resource appears in Bazaar depends on facilitator-side discovery support and
+indexing behavior.
 
 This is the "agents self-publish x402 endpoints" direction. Field names on
 ``ResourceConfig`` / discovery helpers can vary across x402 SDK versions; this helper

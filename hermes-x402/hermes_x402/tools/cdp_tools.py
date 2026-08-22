@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ def cdp_transfer(args: dict, **kwargs) -> str:
     args = args or {}
     to = args.get("to")
     amount = args.get("amount")
-    token = (args.get("token") or "usdc").lower()
+    token = str(args.get("token") or "usdc").strip().lower()
     network = args.get("network") or config.network()
     override = bool(args.get("override"))
 
@@ -116,23 +117,54 @@ def cdp_transfer(args: dict, **kwargs) -> str:
     # Guard 2: per-session cumulative transfer ceiling (applies even with override=true).
     # This prevents unbounded fund drainage across multiple calls in one session.
     session_id = current_session_id(kwargs)
+    transfer_kind: str | None = None
+    transfer_budget = 0.0
+    budget_unit = "USDC"
     if token == "usdc":
+        transfer_kind = "transfer"
         transfer_budget = config.session_transfer_budget_usdc()
-        if transfer_budget > 0 and session_id:
+    elif token == "eth":
+        transfer_kind = "transfer_eth"
+        transfer_budget = config.session_transfer_budget_eth()
+        budget_unit = "ETH"
+
+    transfer_journal_id: int | None = None
+    if transfer_kind and transfer_budget > 0:
+        if not session_id:
+            if config.is_strict():
+                return _err(
+                    "session transfer budget could not be enforced because no Hermes session id "
+                    "was available; refusing transfer under strict failure_mode.",
+                )
+            logger.warning(
+                "hermes-x402: session id unavailable; skipping %s transfer budget check (best-effort)",
+                token,
+            )
+        else:
             try:
-                already_transferred = ledger.session_transfer_total(session_id)
-                if already_transferred + amount_float > transfer_budget:
-                    return _err(
-                        f"cumulative transfer of {already_transferred + amount_float:.4f} USDC "
-                        f"would exceed the per-session transfer budget of {transfer_budget:.4f} USDC "
-                        f"(already transferred {already_transferred:.4f} USDC this session); "
-                        "raise x402.session_transfer_budget_usdc in config to continue.",
-                        amount=amount,
-                        already_transferred_usdc=already_transferred,
-                        session_transfer_budget_usdc=transfer_budget,
-                    )
-            except Exception as exc:
-                logger.warning("hermes-x402: session transfer budget check failed: %s", exc)
+                transfer_journal_id = ledger.journal_begin_transfer(
+                    fingerprint=(
+                        f"{transfer_kind}:{session_id}:{int(time.time() * 1_000_000_000)}:"
+                        f"{to}:{amount_float}:{network}"
+                    ),
+                    idempotency_key=None,
+                    endpoint=to,
+                    cap_amount=amount_float,
+                    session_id=session_id,
+                    budget=transfer_budget,
+                    kind=transfer_kind,
+                )
+            except ledger.BudgetExceededError as exc:
+                return _err(
+                    f"cumulative transfer would exceed the per-session {token.upper()} transfer "
+                    f"budget of {transfer_budget:.4f} {budget_unit}; "
+                    f"{exc}. raise x402.session_transfer_budget_{token} to continue.",
+                    amount=amount,
+                    session_transfer_budget=transfer_budget,
+                    token=token,
+                )
+            except ledger.JournalError as exc:
+                logger.warning("hermes-x402: session transfer budget reservation failed: %s", exc)
                 if config.is_strict():
                     return _err(
                         "session transfer budget could not be verified and failure_mode is strict; "
@@ -141,18 +173,44 @@ def cdp_transfer(args: dict, **kwargs) -> str:
 
     try:
         result = wallet_ops.transfer(to, amount, token, network)
-        # Record the transfer so the session ceiling accounts for it.
+        tx_hash = result.get("tx_hash")
+        # Record USDC transfers in the spend ledger (ETH uses transfer journal only).
         if token == "usdc" and session_id:
-            ledger.record_payment(
+            recorded = ledger.record_payment(
                 kind="transfer",
                 amount_usdc=amount_float,
                 network=network,
                 endpoint=to,
-                transaction=result.get("tx_hash"),
+                transaction=tx_hash,
                 session_id=session_id,
+            )
+            if transfer_journal_id is not None:
+                ledger.journal_finalize(
+                    transfer_journal_id,
+                    state="succeeded" if recorded else "unknown",
+                    amount_usdc=amount_float,
+                    tx=tx_hash,
+                    result_json=json.dumps({"recorded": bool(recorded)}),
+                )
+            if not recorded and config.is_strict():
+                return _err(
+                    "transfer sent but local ledger write failed under strict failure_mode; "
+                    "treating settlement as unknown until reconciled.",
+                    tx_hash=tx_hash,
+                    reconcile=True,
+                )
+        elif transfer_journal_id is not None:
+            ledger.journal_finalize(
+                transfer_journal_id,
+                state="succeeded",
+                amount_usdc=amount_float,
+                tx=tx_hash,
+                result_json=json.dumps({"token": token}),
             )
         return json.dumps(result)
     except Exception as exc:  # noqa: BLE001
+        if transfer_journal_id is not None:
+            ledger.journal_finalize(transfer_journal_id, state="failed")
         return _err(f"{type(exc).__name__}: {exc}", to=to, amount=amount, token=token, network=network)
 
 

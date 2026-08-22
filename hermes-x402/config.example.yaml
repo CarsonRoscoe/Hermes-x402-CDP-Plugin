@@ -39,9 +39,11 @@ x402:
   # Fund the wallet: testnet via the cdp_faucet tool; mainnet via the cdp_onramp tool.
 
   # Per-call USDC cap and session ceiling. The session ceiling covers x402 paid calls.
-  # Direct cdp_transfer is not an x402 payment; USDC transfers use the per-call cap only.
+  # Direct cdp_transfer is not an x402 payment; transfer ceilings are configured separately.
   max_price_usdc: 0.10
   session_budget_usdc: 5.0
+  session_transfer_budget_usdc: 5.0   # cumulative USDC transfer cap per session
+  session_transfer_budget_eth: 0.25   # cumulative ETH transfer cap per session
 
   # "strict" = refuse the paid call if any money guard can't be verified (recommended).
   failure_mode: strict

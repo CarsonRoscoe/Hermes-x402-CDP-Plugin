@@ -61,7 +61,8 @@ Run `hermes x402 init` once to provision the wallet and register the Bazaar MCP.
 
 `x402.session_budget_usdc` applies to paid x402 HTTP/MCP calls. Direct wallet transfers
 through `cdp_transfer` are not x402 payments; USDC transfers are guarded by
-`x402.max_price_usdc` unless `override=true`.
+`x402.max_price_usdc` (unless `override=true`) and cumulative per-session ceilings
+(`x402.session_transfer_budget_usdc` / `x402.session_transfer_budget_eth`).
 
 ## Layout
 

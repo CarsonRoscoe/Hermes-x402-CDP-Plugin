@@ -87,6 +87,9 @@ DEFAULTS = {
     # (not recommended on mainnet). Unlike session_budget_usdc this covers direct
     # wallet transfers rather than x402 payments.
     "session_transfer_budget_usdc": None,
+    # Cumulative cap on ETH transfers per session (token units, not USD).
+    # Defaults to session_transfer_budget_usdc when unset so ETH is bounded by default.
+    "session_transfer_budget_eth": None,
     # Failure posture for money guards. "strict" (default) fails closed: a paid call is
     # refused when a guard (budget, settlement) cannot be verified. "best-effort" prefers
     # availability and allows the call when a guard errors.
@@ -213,6 +216,23 @@ def session_transfer_budget_usdc() -> float:
             pass
     # Fall back to the x402 session budget as a sensible default ceiling.
     return session_budget_usdc()
+
+
+def session_transfer_budget_eth() -> float:
+    """Cumulative per-session ETH cap for direct wallet transfers (cdp_transfer).
+
+    Uses ETH token units (e.g. ``0.2`` means 0.2 ETH). Defaults to
+    ``session_transfer_budget_usdc`` when not explicitly configured so ETH transfers have
+    a finite aggregate ceiling by default.
+    """
+    cfg = plugin_config()
+    raw = cfg.get("session_transfer_budget_eth")
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    return session_transfer_budget_usdc()
 
 
 def failure_mode() -> str:

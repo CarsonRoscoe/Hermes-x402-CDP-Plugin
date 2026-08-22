@@ -108,7 +108,7 @@ def record_payment(
     endpoint: str | None = None,
     transaction: str | None = None,
     session_id: str | None = None,
-) -> None:
+) -> bool:
     """Append a payment row. ``kind`` is one of "http" | "mcp" | "inference"."""
     try:
         with _connect() as conn:
@@ -125,6 +125,7 @@ def record_payment(
                     transaction,
                 ),
             )
+        return True
     except Exception as exc:
         global record_failures
         record_failures += 1
@@ -134,6 +135,7 @@ def record_payment(
             "hermes-x402: FAILED to record %s payment of %.6f USDC (count=%d): %s",
             kind, float(amount_usdc or 0), record_failures, exc,
         )
+        return False
 
 
 def recent_spend(limit: int = 20) -> list[dict]:
@@ -277,6 +279,77 @@ def journal_begin(
         global record_failures
         record_failures += 1
         logger.warning("hermes-x402: FAILED to open payment journal entry: %s", exc)
+        raise JournalError(str(exc)) from exc
+
+
+def journal_begin_transfer(
+    *,
+    fingerprint: str,
+    idempotency_key: str | None,
+    endpoint: str | None,
+    cap_amount: float,
+    session_id: str,
+    budget: float,
+    kind: str = "transfer",
+) -> int:
+    """Atomically reserve per-session transfer budget before moving funds.
+
+    Uses only journal rows for accounting so transfer budget enforcement remains correct even
+    when the settled ``payments`` write fails after a successful transfer. ``amount_usdc`` is
+    treated as a generic numeric amount for transfer kinds (USDC uses USDC units; ETH uses ETH
+    units in ``transfer_eth`` rows).
+    """
+    cap = float(cap_amount or 0)
+    if cap <= 0:
+        raise JournalError("transfer cap_amount must be > 0")
+    if not session_id:
+        raise JournalError("session_id is required for transfer reservation")
+    if budget <= 0:
+        raise JournalError("transfer budget must be > 0")
+    try:
+        ensure_data_dir()
+        conn = sqlite3.connect(str(ledger_path()), isolation_level=None)
+        try:
+            conn.executescript(_SCHEMA)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                spent = conn.execute(
+                    "SELECT COALESCE(SUM(amount_usdc), 0) FROM payment_journal"
+                    " WHERE session_id = ? AND kind = ? AND state = 'succeeded'",
+                    (session_id, kind),
+                ).fetchone()[0] or 0
+                placeholders = ",".join("?" for _ in JOURNAL_OPEN_STATES)
+                reserved = conn.execute(
+                    f"SELECT COALESCE(SUM(cap_usdc), 0) FROM payment_journal"
+                    f" WHERE session_id = ? AND kind = ? AND state IN ({placeholders})",
+                    (session_id, kind, *JOURNAL_OPEN_STATES),
+                ).fetchone()[0] or 0
+                if float(spent) + float(reserved) + cap > budget:
+                    conn.execute("ROLLBACK")
+                    raise BudgetExceededError(float(spent), float(reserved), cap, budget)
+                now = time.time()
+                cur = conn.execute(
+                    "INSERT INTO payment_journal"
+                    " (ts, updated_ts, fingerprint, idempotency_key, state, kind, endpoint_host,"
+                    "  cap_usdc, amount_usdc, tx, session_id, result_json)"
+                    " VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL, ?, NULL)",
+                    (now, now, fingerprint, idempotency_key, kind, _host(endpoint), cap, session_id),
+                )
+                conn.execute("COMMIT")
+                return int(cur.lastrowid)
+            except BudgetExceededError:
+                raise
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+    except BudgetExceededError:
+        raise
+    except Exception as exc:
+        global record_failures
+        record_failures += 1
+        logger.warning("hermes-x402: FAILED to reserve transfer budget: %s", exc)
         raise JournalError(str(exc)) from exc
 
 

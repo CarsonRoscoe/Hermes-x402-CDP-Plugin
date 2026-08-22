@@ -888,10 +888,24 @@ def test_cdp_transfer_eth_not_capped_by_usdc_cap(monkeypatch):
     # We can't send ETH without CDP creds, but the guard check itself must not block it.
     from hermes_x402.tools.cdp_tools import cdp_transfer
 
-    out = json.loads(cdp_transfer({"to": "0xrecipient", "amount": 1, "token": "eth"}))
+    out = json.loads(cdp_transfer({"to": "0xrecipient", "amount": 1, "token": "eth"}, session_id="s-eth-1"))
     # Should fail at the CDP layer (no creds in test), not at the cap guard.
     assert out.get("error") is not None
     assert "cap" not in str(out.get("error", "")).lower()
+
+
+def test_cdp_transfer_token_whitespace_is_normalized(monkeypatch):
+    """USDC guardrails must apply when token has surrounding whitespace."""
+    monkeypatch.setattr("hermes_x402.config.max_price_usdc", lambda: 1.0)
+    monkeypatch.setattr("hermes_x402.config.session_transfer_budget_usdc", lambda: 100.0)
+    from hermes_x402.tools.cdp_tools import cdp_transfer
+
+    out = json.loads(cdp_transfer(
+        {"to": "0xrecipient", "amount": 2.0, "token": " USDC "},
+        session_id="s-token-normalize",
+    ))
+    assert "error" in out
+    assert "cap" in out["error"].lower()
 
 
 def test_cdp_payments_shape(monkeypatch):
@@ -1335,6 +1349,15 @@ def test_permit2_only_endpoint_returns_actionable_error(monkeypatch):
     assert "provisioned" not in combined
 
 
+def test_retry_detects_no_matching_requirements_by_type():
+    """NoMatchingRequirementsError class instances should map to incompatible_scheme."""
+    from x402.schemas import NoMatchingRequirementsError
+
+    from hermes_x402.tools.retry_mcp import _is_no_matching_requirements_error
+
+    assert _is_no_matching_requirements_error(NoMatchingRequirementsError("no match")) is True
+
+
 # --------------------------------------------------------------------------- #
 # M5 — Response body truncation marker
 # --------------------------------------------------------------------------- #
@@ -1461,6 +1484,43 @@ def test_cdp_transfer_session_not_bounded_by_x402_budget(monkeypatch):
         session_id="s-m2b",
     ))
     assert "error" not in out, f"should succeed within transfer budget: {out}"
+
+
+def test_cdp_transfer_missing_session_blocks_in_strict(monkeypatch):
+    """Strict mode must refuse capped transfers when no session identity exists."""
+    monkeypatch.setattr("hermes_x402.config.session_transfer_budget_usdc", lambda: 1.0)
+    monkeypatch.setattr("hermes_x402.config.is_strict", lambda: True)
+    from hermes_x402.tools.cdp_tools import cdp_transfer
+
+    out = json.loads(cdp_transfer({"to": "0xrecipient", "amount": 0.1, "token": "usdc"}))
+    assert "error" in out
+    assert "session" in out["error"].lower()
+
+
+def test_cdp_transfer_eth_session_budget_blocks_overshoot(monkeypatch):
+    """ETH transfers are bounded by session_transfer_budget_eth per session."""
+    import hermes_x402.cdp.wallet_ops as wo
+    from hermes_x402.tools.cdp_tools import cdp_transfer
+
+    def mock_transfer(to, amount, token, network):
+        return {"tx_hash": "0xmock", "to": to, "amount": str(amount),
+                "token": token, "network": network, "explorer": ""}
+
+    monkeypatch.setattr(wo, "transfer", mock_transfer)
+    monkeypatch.setattr("hermes_x402.config.session_transfer_budget_eth", lambda: 1.0)
+
+    out1 = json.loads(cdp_transfer(
+        {"to": "0xrecipient", "amount": 0.6, "token": "eth"},
+        session_id="s-eth-cap",
+    ))
+    assert "error" not in out1
+
+    out2 = json.loads(cdp_transfer(
+        {"to": "0xrecipient", "amount": 0.6, "token": "eth"},
+        session_id="s-eth-cap",
+    ))
+    assert "error" in out2
+    assert "budget" in out2["error"].lower()
 
 
 # --------------------------------------------------------------------------- #

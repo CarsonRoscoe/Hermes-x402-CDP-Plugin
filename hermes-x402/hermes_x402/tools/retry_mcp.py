@@ -30,6 +30,11 @@ from ._paid import (
 
 logger = logging.getLogger(__name__)
 
+try:
+    from x402.schemas import NoMatchingRequirementsError as _NoMatchingRequirementsError
+except Exception:  # pragma: no cover - dependency shape varies across SDK versions
+    _NoMatchingRequirementsError = None
+
 
 try:
     # Prefer Hermes's own sanitizer so the generated ``mcp_*`` names stay in lockstep with
@@ -44,6 +49,19 @@ except Exception:
         preserved, underscores kept).
         """
         return re.sub(r"[^A-Za-z0-9_]", "_", str(value or ""))
+
+
+def _is_no_matching_requirements_error(exc: Exception) -> bool:
+    """SDK-compatible detection for Permit2-only/no-compatible-scheme failures."""
+    if _NoMatchingRequirementsError is not None and isinstance(exc, _NoMatchingRequirementsError):
+        return True
+    inner = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if _NoMatchingRequirementsError is not None and inner is not None:
+        if isinstance(inner, _NoMatchingRequirementsError):
+            return True
+    name = type(exc).__name__
+    msg = str(exc)
+    return "NoMatchingRequirements" in name or "NoMatchingRequirements" in msg
 
 
 def _load_mcp_servers() -> dict:
@@ -186,8 +204,7 @@ async def _do_retry(server_url, headers, sanitized_suffix, arguments, cap, payme
                 result = await with_timeout(x402_mcp.call_tool(real, arguments or {}))
                 price = payment_client.last_min_usdc
         except Exception as exc:
-            inner_msg = str(exc)
-            if "NoMatchingRequirements" in type(exc).__name__ or "NoMatchingRequirements" in inner_msg:
+            if _is_no_matching_requirements_error(exc):
                 raise StructuredToolError({
                     "error": "incompatible_scheme",
                     "detail": (
